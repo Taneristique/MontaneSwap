@@ -78,6 +78,26 @@ Guardian / deployer EOA: `0xDdf4E32e4d23310E6Ec17870D0232905C05f2910`
 Most contracts **match** / **exact** on MonadVision. **CreditMarket** does not — live bytecode ≠ this repo until redeploy.  
 `cd contracts && ./script/verify-testnet.sh`
 
+### Test USDC (MockUSDC)
+
+Testnet collateral is **MockUSDC**, not Circle USDC. `mint(address,uint256)` is **permissionless** — any wallet can self-fund.  
+`Deploy.s.sol` also mints `1_000_000` (18 decimals) to the deployer on each fresh deploy.
+
+Do **not** paste a private key into the mint command. Import a keystore once (interactive prompt), then sign with `--account`:
+
+```bash
+# one-time: stores an encrypted keystore under ~/.foundry/keystores/
+cast wallet import defaultWallet --interactive
+
+# amount = 10_000e18 — set USDC from the table (or new deploy logs)
+# YOUR_WALLET = address that should receive the mint (often the same as defaultWallet)
+cast wallet address defaultWallet
+cast send "$USDC" "mint(address,uint256)" "$YOUR_WALLET" 10000000000000000000000 \
+  --rpc-url https://testnet-rpc.monad.xyz --account defaultWallet
+```
+
+No separate faucet script: call the contract (Explorer / cast / Foundry console) the same way. Explorer “Write Contract” + connected wallet also works if you prefer not to use cast.
+
 ---
 
 ## Protocol sketch
