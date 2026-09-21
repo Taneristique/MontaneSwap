@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Montane Swap">
+  <clipPath id="r"><rect width="512" height="512" rx="112"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="256" height="512" fill="#E11D48"/>
+    <rect x="256" width="256" height="512" fill="#22C55E"/>
+    <path fill="#F8FAFC" d="M40 400 L118 288 L158 322 L248 132 L476 400 Z"/>
+    <path fill="#E11D48" d="M228 168 L248 132 L276 178 L250 186 Z"/>
+  </g>
+</svg>
