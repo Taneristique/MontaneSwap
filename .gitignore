@@ -1,0 +1,40 @@
+# Root
+.pnpm-store/
+.DS_Store
+*.pem
+.env
+.env.*
+!.env.example
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/coverage/
+frontend/.vercel/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+frontend/.env*
+!frontend/.env.example
+
+# Legacy duplicate app (not part of Metropolis UI)
+frontend/montane-debt-app/
+
+# Contracts / Foundry
+contracts/cache/
+contracts/out/
+contracts/.env
+contracts/.env.*
+!contracts/.env.example
+contracts/broadcast/**/dry-run/
+contracts/broadcast/*/31337/
+
+# Nested git (monorepo uses this root only)
+contracts/.git/
+contracts/.gitmodules
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
