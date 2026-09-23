@@ -11,7 +11,7 @@ import { TAPE_SEED } from "./tape-seed";
 
 const rpc = process.env.NEXT_PUBLIC_RPC ?? "https://testnet-rpc.monad.xyz";
 const FALLBACK_MARKET =
-  "0xE13c7666449Eb4EDa7c671225333C457171c643f" as Address;
+  "0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD" as Address;
 
 const swapAbi = parseAbi(["function market() view returns (address)"]);
 const marketAbi = parseAbi(["function tradeCount() view returns (uint256)"]);
@@ -204,7 +204,7 @@ async function refreshTape(): Promise<Cache | null> {
     cache = {
       at: Date.now(),
       market,
-      tradeCount: Math.max(tradeCount, TAPE_SEED.length),
+      tradeCount,
       fills: mergeFills(TAPE_SEED, mergeFills(cache?.fills ?? [], fresh)),
       scannedTo: tip,
     };
@@ -226,8 +226,8 @@ function withSeed(c: Cache | null): Cache {
     } satisfies Cache);
   return {
     ...base,
-    tradeCount: Math.max(base.tradeCount, TAPE_SEED.length),
-    fills: mergeFills(TAPE_SEED, base.fills),
+    tradeCount: TAPE_SEED.length > 0 ? Math.max(base.tradeCount, TAPE_SEED.length) : base.tradeCount,
+    fills: TAPE_SEED.length > 0 ? mergeFills(TAPE_SEED, base.fills) : base.fills,
   };
 }
 

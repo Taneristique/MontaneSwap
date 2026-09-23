@@ -81,9 +81,16 @@ export function useFillTape(market?: Address, _taker?: Address) {
         fills: ApiFill[];
         fetchedAt?: number;
       };
-      setTradeCount(Math.max(data.tradeCount ?? 0, TAPE_SEED.length));
-      // API wins on duplicate keys; seed fills gaps when RPC scan is behind.
-      setFills(merge((data.fills ?? []).map(fromApi), TAPE_SEED.map(fromApi)));
+      setTradeCount(
+        TAPE_SEED.length > 0
+          ? Math.max(data.tradeCount ?? 0, TAPE_SEED.length)
+          : (data.tradeCount ?? 0),
+      );
+      setFills(
+        TAPE_SEED.length > 0
+          ? merge((data.fills ?? []).map(fromApi), TAPE_SEED.map(fromApi))
+          : (data.fills ?? []).map(fromApi),
+      );
       setFetchedAt(data.fetchedAt ?? Date.now());
     } catch {
       /* keep seed / prior — phone must never go blank */

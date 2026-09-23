@@ -370,6 +370,7 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
       cdp && cdp.debtAmount > 0n
         ? markHealth(cdp.collateralAmount, cdp.debtAmount, markPx)
         : (hWad ?? 0n);
+    // Book column is H@mark — color matches the number (not Season/hunt gate).
     return {
       ...o,
       issuer,
