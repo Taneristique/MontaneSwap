@@ -263,7 +263,8 @@ export default function PortfolioPage() {
           cdp.debtAmount > 0n
             ? markHealth(cdp.collateralAmount, cdp.debtAmount, mid.markPx > 0n ? mid.markPx : 10n ** 18n)
             : (hOn ?? 0n);
-        const season = seasonOf(hMark > 0n ? hMark : (hOn ?? 0n));
+        // Badge / Season / hunt gate = on-chain G/F — not H @ mark.
+        const season = seasonOf(hOn != null && hOn > 0n ? hOn : hMark);
         return { id, cdp, hOn, hMark, season, isIssuer, isLong };
       })
       .filter(Boolean);
@@ -468,6 +469,9 @@ export default function PortfolioPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-sm font-medium">#{c.id.toString()}</span>
                     <Pill tone={frost ? "red" : "green"}>{c.season}</Pill>
+                    <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                      on-chain gate
+                    </span>
                     {c.isIssuer && <Pill>Issuer</Pill>}
                     {c.isLong && <Pill tone="amber">Long owner</Pill>}
                   </div>
@@ -477,10 +481,18 @@ export default function PortfolioPage() {
                     <dt className="text-zinc-500">Face</dt>
                     <dd className="text-right font-mono">{fromWad(c.cdp.debtAmount, 2)} mM</dd>
                     <dt className="text-zinc-500">H @ mark</dt>
-                    <dd className="text-right font-mono">{fromWad(c.hMark, 2)}</dd>
+                    <dd className="text-right font-mono">
+                      {fromWad(c.hMark, 2)}{" "}
+                      <span className="text-zinc-500">
+                        ({seasonOf(c.hMark > 0n ? c.hMark : 0n)})
+                      </span>
+                    </dd>
                     <dt className="text-zinc-500">H on-chain</dt>
-                    <dd className="text-right font-mono text-zinc-500">
-                      {c.hOn != null ? fromWad(c.hOn, 2) : "—"}
+                    <dd className="text-right font-mono">
+                      {c.hOn != null ? fromWad(c.hOn, 2) : "—"}{" "}
+                      <span className={frost ? "text-[#E11D48]" : "text-[#22C55E]"}>
+                        {c.season}
+                      </span>
                     </dd>
                   </dl>
                   <Link

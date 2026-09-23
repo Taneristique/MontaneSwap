@@ -10,6 +10,7 @@ import { ensureAllowance } from "@/lib/ensure-usdc";
 import { etaFromUnix, fromWad, shortAddr, stampFromUnix, toWad } from "@/lib/format";
 import { getTxClients } from "@/lib/tx-clients";
 import { txError } from "@/lib/tx-error";
+import { useIsClient } from "@/lib/use-is-client";
 import { useProtocol } from "@/lib/use-protocol";
 import { monadTestnet } from "@/lib/wagmi";
 
@@ -30,8 +31,10 @@ export default function SeasonPage() {
   const [dirAmt, setDirAmt] = useState("10");
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+  // 0 until client mount — avoids Date.now() / wagmi SSR vs hydrate disabled mismatch.
+  const [nowSec, setNowSec] = useState(0);
   const [qCdp, setQCdp] = useState<string | null>(null);
+  const ready = useIsClient();
   const { address, isConnected } = useAccount();
   const protocol = useProtocol();
   const me = address?.toLowerCase() ?? null;
@@ -51,9 +54,11 @@ export default function SeasonPage() {
   }, [me]);
 
   useEffect(() => {
+    if (!ready) return;
+    setNowSec(Math.floor(Date.now() / 1000));
     const tick = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
     return () => window.clearInterval(tick);
-  }, []);
+  }, [ready]);
 
   const id = useMemo(() => {
     try {
@@ -360,11 +365,13 @@ export default function SeasonPage() {
   const maturity = maturityOnChain.data ?? m?.[3] ?? 0n;
   const openedAt = m?.[2] ?? 0n;
   const dirDeadline = openedAt > 0n ? openedAt + 12n * 3600n : 0n;
-  const pastMaturity = maturity > 0n && BigInt(nowSec) >= maturity;
-  const packOpen = mid > 0n && !resolved && !pastMaturity;
-  const canResolve = mid > 0n && !resolved && pastMaturity;
+  const pastMaturity =
+    ready && nowSec > 0 && maturity > 0n && BigInt(nowSec) >= maturity;
+  const packOpen = ready && mid > 0n && !resolved && !pastMaturity;
+  const canResolve = ready && mid > 0n && !resolved && pastMaturity;
   const winBal = verdantWins ? (myV.data ?? 0n) : (myF.data ?? 0n);
   const canClaim =
+    ready &&
     mid > 0n &&
     resolved &&
     !claimed.data &&
@@ -478,9 +485,9 @@ export default function SeasonPage() {
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
           <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-            Your positions {me ? "" : "· connect"}
+            Your positions {!ready || !me ? "· connect" : ""}
           </p>
-          {!address ? (
+          {!ready || !address ? (
             <p className="mt-3 text-sm text-zinc-500">Connect to see V/F you hold.</p>
           ) : myPositions.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-500">
@@ -597,7 +604,7 @@ export default function SeasonPage() {
 
           <button
             type="button"
-            disabled={busy || !SEASON_POOL || mid > 0n || id === 0n}
+            disabled={!ready || busy || !SEASON_POOL || mid > 0n || id === 0n}
             onClick={() =>
               void run("Market opened.", async () => {
                 const { publicClient, wallet } = await getTxClients();
@@ -626,7 +633,7 @@ export default function SeasonPage() {
           <div className="mt-2 grid grid-cols-2 gap-2">
             <button
               type="button"
-              disabled={busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
+              disabled={!ready || busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
               onClick={() =>
                 void run("Minted VERDANT.", async () => {
                   const amt = toWad(dirAmt);
@@ -654,7 +661,7 @@ export default function SeasonPage() {
             </button>
             <button
               type="button"
-              disabled={busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
+              disabled={!ready || busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
               onClick={() =>
                 void run("Minted FROSTBITE.", async () => {
                   const amt = toWad(dirAmt);
