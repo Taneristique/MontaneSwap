@@ -10,16 +10,17 @@ CHAIN=10143
 VERIFIER_URL="https://sourcify-api-monad.blockvision.org/"
 RPC="${ETH_RPC_URL:-https://testnet-rpc.monad.xyz}"
 
-SWAP=0x14f8C210Aa5eB50CDD59683BEfd89169A5B40763
-SEASON=0xc04A778b007a927F9276141296c7EabA2f142dc3
-TREASURY=0x86058bc519b8a69922E6D5572aa11C6B80DB3603
-USDC=0xDd6B8E3E5555Efb3A9DC6f4cc3D1D0B703e46895
+# 2026-09-21 redeploy (teamKey)
+SWAP=0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5
+SEASON=0x550FCf8f52F0304c368d7452b6C7AA2515c7143b
+TREASURY=0xc84035652E4055051077eA55b16cAc4534d18B0C
+USDC=0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f
 PYTH=0x2880aB155794e7179c9eE2e38200202908C17B43
 GUARDIAN=0xDdf4E32e4d23310E6Ec17870D0232905C05f2910
-MANAGER=0xfEE479167399B2cc9f2e2D26a33b4104f2c595AD
-CDP=0x17f379168818698ce2A08838568B873A60d3ad37
-MARKET=0xE13c7666449Eb4EDa7c671225333C457171c643f
-TOKEN=0x0be0d35549ca751416798a8de7af55efd4077d0c
+MANAGER=0x034e2Db9C1F64815bb4280A67a9EF6766F1d7D22
+CDP=0x2f46c40e3371FC1029C3974AbA76997d92f6f745
+MARKET=0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD
+TOKEN=0x70924556BF3D2ed73608E41fA7Ed298dCF7B33eD
 
 verify() {
   local addr=$1
@@ -66,8 +67,7 @@ verify "$TOKEN" src/MontaneMonad.sol:MontaneMonad \
   "$(cast abi-encode 'constructor(address,address,address)' "$MANAGER" "$MARKET" "$USDC")"
 
 verify "$SEASON" src/SeasonPool.sol:SeasonPool \
-  "$(cast abi-encode 'constructor(address,address,address)' "$USDC" "$CDP" "$TREASURY")"
+  "$(cast abi-encode 'constructor(address,address,address,address)' "$USDC" "$CDP" "$TREASURY" "$MANAGER")"
 
 echo
-echo "Done. CreditMarket may fail until repo source matches live bytecode (post-deploy optimizations)."
-echo "Explorer: https://testnet.monadvision.com/address/<addr>"
+echo "Done. Explorer: https://testnet.monadvision.com/address/<addr>"

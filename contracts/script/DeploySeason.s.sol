@@ -11,8 +11,8 @@ import {CDPManager} from "../src/CDPManager.sol";
 ///     --rpc-url https://testnet-rpc.monad.xyz --account teamKey --broadcast -vvvv
 ///   Optional: SWAP=0x... (must be a stack whose manager.seasonPool is still unset)
 contract DeploySeason is Script {
-    /// @dev Current Monad testnet MontaneSwap root (teamKey). Override after full redeploy.
-    address constant DEFAULT_SWAP = 0x14f8C210Aa5eB50CDD59683BEfd89169A5B40763;
+    /// @dev Current Monad testnet MontaneSwap root (2026-09-21 teamKey redeploy).
+    address constant DEFAULT_SWAP = 0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5;
 
     function run() external {
         address swapAddr = vm.envOr("SWAP", DEFAULT_SWAP);
