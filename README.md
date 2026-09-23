@@ -13,45 +13,22 @@ brand/        logo / assets
 
 ---
 
-## Live testnet vs this repo (important)
+## Live stack = this repo (2026-09-21 redeploy)
 
-| | **On-chain now** (frontend defaults) | **This repository** |
-|---|--------------------------------------|---------------------|
-| Stack | Deployed earlier on Monad testnet | Audit / integrity patch — **ahead of live bytecode** |
-| Season | Manual `openMarket`; maturity ≈ `now + 1d` | Opens on mint; maturity follows **cell clock** |
-| Book / gas | Older match loops; no live-side caps | Bounded live book, shorts, waterline, scrub |
-| CreditMarket verify | Fails Sourcify length match | Matches after next full redeploy |
+Frontend defaults and on-chain bytecode match this repository: Season opens on mint, maturity follows the **cell clock**, book loops are capped, repay scrubs the book, Sourcify **full** on all core contracts including CreditMarket.
 
-**Frontend still points at the live stack** until Season markets settle and we redeploy. Do not expect every README “patch” line to be live yet.
+**Legacy stack** (`0x14f8…0763` / Season `0xc04A…`) is abandoned after claims — do not point the UI there.
 
-### Why a full redeploy is coming
-
-1. **Immutables** — `creditMarket` is fixed on `CDPManager`, `CollateralDebtPosition`, and `MontaneMonad`. You cannot swap only `CreditMarket`.
-2. **Season clock bug (live)** — Opening the market hours after mint set maturity to `block.timestamp + MATURITY`, so Season ran ~1h past the cell’s real maturity. Repo fixes: open on `createCDP`, `maturityOf` = `firstSaleAt || openedAt` + `MATURITY`.
-3. **Stuck / DoS integrity** — Live book had unbounded gas paths; Season `resolve` used `health()` (reverts if CDP closed). Repo: caps + `ratio` + settle-before-repay + escrow scrub / withdraw fixes.
-4. **Active Season first** — As of the last check, markets were still open with USDC locked. Redeploy only after **resolve + claim** (or dual-run: keep old Season for claims, point UI at new `SWAP`).
-
-### After redeploy checklist
+Immutables still mean you cannot hot-swap only `CreditMarket`; any future integrity change needs another full `MontaneSwap` + `DeploySeason` pair.
 
 ```bash
-# 1) Core
+# Redeploy again (if needed)
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url https://testnet-rpc.monad.xyz --account teamKey --broadcast -vvvv
-
-# 2) Season + wire into manager
-forge script script/DeploySeason.s.sol:DeploySeason \
+SWAP=<new> forge script script/DeploySeason.s.sol:DeploySeason \
   --rpc-url https://testnet-rpc.monad.xyz --account teamKey --broadcast -vvvv
-# (script calls manager.setSeasonPool)
-
-# 3) Frontend
-# NEXT_PUBLIC_SWAP=...
-# NEXT_PUBLIC_SEASON_POOL=...
-
-# 4) Verify
 ./script/verify-testnet.sh
 ```
-
-Solo `new CreditMarket(...)` **does not work** — the rest of the stack still points at the old market.
 
 ---
 
@@ -61,39 +38,41 @@ Derived from `NEXT_PUBLIC_SWAP` / `NEXT_PUBLIC_SEASON_POOL` (see `frontend/lib/a
 
 | Role | Address |
 |------|---------|
-| **MontaneSwap (root)** | [`0x14f8C210Aa5eB50CDD59683BEfd89169A5B40763`](https://testnet.monadvision.com/address/0x14f8C210Aa5eB50CDD59683BEfd89169A5B40763) |
-| **SeasonPool** | [`0xc04A778b007a927F9276141296c7EabA2f142dc3`](https://testnet.monadvision.com/address/0xc04A778b007a927F9276141296c7EabA2f142dc3) |
-| CreditMarket | [`0xE13c7666449Eb4EDa7c671225333C457171c643f`](https://testnet.monadvision.com/address/0xE13c7666449Eb4EDa7c671225333C457171c643f) |
-| CDPManager | [`0xfEE479167399B2cc9f2e2D26a33b4104f2c595AD`](https://testnet.monadvision.com/address/0xfEE479167399B2cc9f2e2D26a33b4104f2c595AD) |
-| CollateralDebtPosition | [`0x17f379168818698ce2A08838568B873A60d3ad37`](https://testnet.monadvision.com/address/0x17f379168818698ce2A08838568B873A60d3ad37) |
-| MontaneMonad (mMonad) | [`0x0be0d35549ca751416798a8de7af55efd4077d0c`](https://testnet.monadvision.com/address/0x0be0d35549ca751416798a8de7af55efd4077d0c) |
-| Treasury | [`0x86058bc519b8a69922E6D5572aa11C6B80DB3603`](https://testnet.monadvision.com/address/0x86058bc519b8a69922E6D5572aa11C6B80DB3603) |
-| MockUSDC | [`0xDd6B8E3E5555Efb3A9DC6f4cc3D1D0B703e46895`](https://testnet.monadvision.com/address/0xDd6B8E3E5555Efb3A9DC6f4cc3D1D0B703e46895) |
+| **MontaneSwap (root)** | [`0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5`](https://testnet.monadvision.com/address/0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5) |
+| **SeasonPool** | [`0x550FCf8f52F0304c368d7452b6C7AA2515c7143b`](https://testnet.monadvision.com/address/0x550FCf8f52F0304c368d7452b6C7AA2515c7143b) |
+| CreditMarket | [`0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD`](https://testnet.monadvision.com/address/0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD) |
+| CDPManager | [`0x034e2Db9C1F64815bb4280A67a9EF6766F1d7D22`](https://testnet.monadvision.com/address/0x034e2Db9C1F64815bb4280A67a9EF6766F1d7D22) |
+| CollateralDebtPosition | [`0x2f46c40e3371FC1029C3974AbA76997d92f6f745`](https://testnet.monadvision.com/address/0x2f46c40e3371FC1029C3974AbA76997d92f6f745) |
+| MontaneMonad (mMonad) | [`0x70924556BF3D2ed73608E41fA7Ed298dCF7B33eD`](https://testnet.monadvision.com/address/0x70924556BF3D2ed73608E41fA7Ed298dCF7B33eD) |
+| Treasury | [`0xc84035652E4055051077eA55b16cAc4534d18B0C`](https://testnet.monadvision.com/address/0xc84035652E4055051077eA55b16cAc4534d18B0C) |
+| MockUSDC | [`0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f`](https://testnet.monadvision.com/address/0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f) |
 | Pyth | `0x2880aB155794e7179c9eE2e38200202908C17B43` |
 
 Guardian / deployer EOA: `0xDdf4E32e4d23310E6Ec17870D0232905C05f2910`
 
 ### Sourcify (live stack)
 
-Most contracts **match** / **exact** on MonadVision. **CreditMarket** does not — live bytecode ≠ this repo until redeploy.  
+All eight contracts above are Sourcify **full** match on MonadVision (post 2026-09-21 redeploy).  
 `cd contracts && ./script/verify-testnet.sh`
 
 ### Test USDC (MockUSDC)
 
-Testnet collateral is **MockUSDC**, not Circle USDC. `mint(address,uint256)` is **permissionless** — any wallet can self-fund.  
+Testnet collateral is **MockUSDC**. `mint(address,uint256)` is **permissionless** — any wallet can self-fund.  
 `Deploy.s.sol` also mints `1_000_000` (18 decimals) to the deployer on each fresh deploy.
 
 Do **not** paste a private key into the mint command. Import a keystore once (interactive prompt), then sign with `--account`:
 
 ```bash
-# one-time: stores an encrypted keystore under ~/.foundry/keystores/
-cast wallet import defaultWallet --interactive
+# one-time (if you do not already have teamKey / defaultWallet):
+cast wallet import teamKey --interactive
 
-# amount = 10_000e18 — set USDC from the table (or new deploy logs)
-# YOUR_WALLET = address that should receive the mint (often the same as defaultWallet)
-cast wallet address defaultWallet
-cast send "$USDC" "mint(address,uint256)" "$YOUR_WALLET" 10000000000000000000000 \
-  --rpc-url https://testnet-rpc.monad.xyz --account defaultWallet
+# MockUSDC from the table above — change YOUR_WALLET_ADDRESS to the recipient
+USDC=0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f
+YOUR_WALLET_ADDRESS=0xDdf4E32e4d23310E6Ec17870D0232905C05f2910
+
+# amount = 10_000e18
+cast send "$USDC" "mint(address,uint256)" "$YOUR_WALLET_ADDRESS" 10000000000000000000000 \
+  --rpc-url https://testnet-rpc.monad.xyz --account teamKey
 ```
 
 No separate faucet script: call the contract (Explorer / cast / Foundry console) the same way. Explorer “Write Contract” + connected wallet also works if you prefer not to use cast.
