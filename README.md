@@ -1,7 +1,7 @@
 # Montane Swap
 
 Debt-note **CLOB** on **Monad** (testnet `10143`) for the Metropolis hackathon.  
-Issue a cell → seed long/short books → trade onchain → optional Season (Verdant / Frostbite).
+Issue a cell → notes listed on the long book → trade notes or bet on their price on the short book → optional Season (Verdant / Frostbite).
 
 ```
 frontend/     Next.js 16 · wagmi · RainbowKit · viem
@@ -13,21 +13,19 @@ brand/        logo / assets
 
 ---
 
-## Live stack = this repo (2026-09-21 redeploy)
+## Live stack = this repo (2026-09-28 redeploy)
 
-Frontend defaults and on-chain bytecode match this repository: Season opens on mint, maturity follows the **cell clock**, book loops are capped, repay scrubs the book, Sourcify **full** on all core contracts including CreditMarket.
+Frontend defaults and on-chain bytecode match this repository: health is marked to the mMonad price, long and short keep a 0.10 spread, Season settles on marked health, per-cell ERC-1155 notes, cash-settled short book. Sourcify verified on all core contracts including CreditMarket.
 
-**Legacy stack** (`0x14f8…0763` / Season `0xc04A…`) is abandoned after claims — do not point the UI there.
+**Legacy stacks** (`0xE3A4…3ef5`, `0xAD4b…a7b0`, `0x14f8…0763`) are abandoned — do not point the UI there.
 
 Immutables still mean you cannot hot-swap only `CreditMarket`; any future integrity change needs another full `MontaneSwap` + `DeploySeason` pair.
 
 ```bash
-# Redeploy again (if needed)
-forge script script/Deploy.s.sol:Deploy \
-  --rpc-url https://testnet-rpc.monad.xyz --account teamKey --broadcast -vvvv
-SWAP=<new> forge script script/DeploySeason.s.sol:DeploySeason \
-  --rpc-url https://testnet-rpc.monad.xyz --account teamKey --broadcast -vvvv
-./script/verify-testnet.sh
+# Redeploy again (from contracts/): test, deploy core + SeasonPool, verify on Sourcify
+./script/deploy-testnet.sh --update-frontend
+# Verify only (any stack; the rest is read on-chain from SWAP)
+SWAP=0x... SEASON=0x... ./script/verify-testnet.sh
 ```
 
 ---
@@ -38,13 +36,13 @@ Derived from `NEXT_PUBLIC_SWAP` / `NEXT_PUBLIC_SEASON_POOL` (see `frontend/lib/a
 
 | Role | Address |
 |------|---------|
-| **MontaneSwap (root)** | [`0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5`](https://testnet.monadvision.com/address/0xE3A43A6d6bd9Ad277E086292C494A0Ace96E3ef5) |
-| **SeasonPool** | [`0x550FCf8f52F0304c368d7452b6C7AA2515c7143b`](https://testnet.monadvision.com/address/0x550FCf8f52F0304c368d7452b6C7AA2515c7143b) |
-| CreditMarket | [`0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD`](https://testnet.monadvision.com/address/0xf4a2A026e0DfE9773AC78d2C056BB7C4DEb076dD) |
-| CDPManager | [`0x034e2Db9C1F64815bb4280A67a9EF6766F1d7D22`](https://testnet.monadvision.com/address/0x034e2Db9C1F64815bb4280A67a9EF6766F1d7D22) |
-| CollateralDebtPosition | [`0x2f46c40e3371FC1029C3974AbA76997d92f6f745`](https://testnet.monadvision.com/address/0x2f46c40e3371FC1029C3974AbA76997d92f6f745) |
-| MontaneMonad (mMonad) | [`0x70924556BF3D2ed73608E41fA7Ed298dCF7B33eD`](https://testnet.monadvision.com/address/0x70924556BF3D2ed73608E41fA7Ed298dCF7B33eD) |
-| Treasury | [`0xc84035652E4055051077eA55b16cAc4534d18B0C`](https://testnet.monadvision.com/address/0xc84035652E4055051077eA55b16cAc4534d18B0C) |
+| **MontaneSwap (root)** | [`0x32e947A829b8bB59eae198014998C34855b9aD62`](https://testnet.monadvision.com/address/0x32e947A829b8bB59eae198014998C34855b9aD62) |
+| **SeasonPool** | [`0x0792a6e6cA7f196764D0E653cC8D9c099eDF5fE0`](https://testnet.monadvision.com/address/0x0792a6e6cA7f196764D0E653cC8D9c099eDF5fE0) |
+| CreditMarket | [`0x88EfD79354E77040ADAf31e9cf0B1b83abe1698D`](https://testnet.monadvision.com/address/0x88EfD79354E77040ADAf31e9cf0B1b83abe1698D) |
+| CDPManager | [`0x4026790fc839298b6564Bc62174Ff0490663e014`](https://testnet.monadvision.com/address/0x4026790fc839298b6564Bc62174Ff0490663e014) |
+| CollateralDebtPosition | [`0x502a58F120E46e957DB9E7F176b784eA468Ca905`](https://testnet.monadvision.com/address/0x502a58F120E46e957DB9E7F176b784eA468Ca905) |
+| MontaneMonad (mMonad) | [`0xdBCbAd311129d091beF19065cA608Cbc98cDF97b`](https://testnet.monadvision.com/address/0xdBCbAd311129d091beF19065cA608Cbc98cDF97b) |
+| Treasury | [`0x60Eb9ccc4ef6614eEC7efA672d7323f8FfAa578E`](https://testnet.monadvision.com/address/0x60Eb9ccc4ef6614eEC7efA672d7323f8FfAa578E) |
 | MockUSDC | [`0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f`](https://testnet.monadvision.com/address/0xb5fd0160056cEBFe59B86FB95A4a6c48ad7E642f) |
 | Pyth | `0x2880aB155794e7179c9eE2e38200202908C17B43` |
 
@@ -52,7 +50,7 @@ Guardian / deployer EOA: `0xDdf4E32e4d23310E6Ec17870D0232905C05f2910`
 
 ### Sourcify (live stack)
 
-All eight contracts above are Sourcify **full** match on MonadVision (post 2026-09-21 redeploy).  
+All eight contracts above are Sourcify verified on MonadVision (2026-09-28 redeploy).  
 `cd contracts && ./script/verify-testnet.sh`
 
 ### Test USDC (MockUSDC)
@@ -89,15 +87,17 @@ No separate faucet script: call the contract (Explorer / cast / Foundry console)
          ┌───────────────┼───────────────┐
          ▼               ▼               ▼
    CollateralDebt   CreditMarket    MontaneMonad
-   Position (cell)  (note CLOB)     (mMonad ERC-20)
+   Position (cell)  (note CLOB)     (mMonad ERC-1155,
+                                     id = cell, USDC vault)
          ▲
          │ health / ratio
    SeasonPool (Verdant / Frostbite)
 ```
 
-- **Cell:** `H = G / F`. Frostbite if `H ≤ 1.10`. Maturity 1 day (testnet).
-- **CLOB:** long and short books do not cross. Seed on mint. Escrow on `CreditMarket`.
-- **Season:** directional (12h) or packs until cell maturity; resolve from on-chain H. In this repo, repay waits for Season settle when wired.
+- **Cell:** health is marked to the mMonad price, `H = G / (F × P_mid)`. Frostbite if `H ≤ 1.10` (hunt opens, repay blocked); Winter levy if `H ≤ 1.00`. Mint needs raw `G / F ≥ 1.10` so notes stay backed at par. Maturity 1 day (testnet).
+- **Price:** `P_mid = (last long fill + last short fill) / 2`, one price for all cells. Long buys push it up (H down), shorts push it down (H up). Long orders must be ≥ last short + 0.10 and short orders ≤ last long − 0.10, so the books always keep a spread. Fills under 1% of the cell's face don't move `P_mid`. No circuit breaker; the guardian pause remains.
+- **CLOB:** long book trades real per-cell notes (seeded with a 1.005 ask on mint). Short book is a cash-settled future on the same cell's note price: each unit locks 1 USDC (short 1 − e, writer e); at maturity v = note TWAP capped at 1.00 (par on a thin book), short gets 1 − v, writer v. Holding both sides nets at 1 USDC. Open shorts per cell are capped at 50% of face; only fills of at least 1% of face (each moving the price at most 1%) feed the TWAP.
+- **Season:** directional (12h) or packs until cell maturity; Verdant iff the cell's marked health `G / (F × P_mid)` is above 1.10 at resolve. The settling `P_mid` and H are stored on-chain (`settleMark`, `settleHealth`). In this repo, repay waits for Season settle when wired.
 
 Params: `contracts/src/helpers/MontaneParams.sol`.
 
@@ -105,7 +105,7 @@ Params: `contracts/src/helpers/MontaneParams.sol`.
 
 - Season `openForMint` + `maturityOf` + `ensureSettled` before close  
 - `ratio` resolve if CDP already inactive; dust sweep if no winners  
-- Caps: `LIVE_PER_SIDE_MAX`, `SHORT_HOLDERS_MAX`, `MATCH_FILL_MAX`, `WATERLINE_SCAN_MAX`  
+- Caps: `LIVE_PER_SIDE_MAX`, `MATCH_FILL_MAX`, `WATERLINE_SCAN_MAX`  
 - `scrubCdp` / fixed `cancelSeed`; novation sets `firstSaleAt` for withdraw  
 
 ---
