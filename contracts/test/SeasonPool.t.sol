@@ -8,6 +8,7 @@ import {Treasury} from "../src/Treasury.sol";
 import {CDPManager} from "../src/CDPManager.sol";
 import {CollateralDebtPosition} from "../src/CollateralDebtPosition.sol";
 import {SeasonPool} from "../src/SeasonPool.sol";
+import {CreditMarket} from "../src/CreditMarket.sol";
 import {MontaneParams} from "../src/helpers/MontaneParams.sol";
 import {MockUSDC} from "./MockUSDC.sol";
 
@@ -261,12 +262,26 @@ contract SeasonPoolTest is Test {
 
     function _openFrostbite(address who, uint256 debt) internal returns (uint256 id) {
         uint256 fee = (debt * 25) / 10_000;
-        uint256 g = (debt * 11) / 10; // H = 1.10 → Frostbite on resolve
+        uint256 g = (debt * 11) / 10;
         uint256 usdcIn = g + fee;
         vm.startPrank(who);
         usdc.approve(address(manager), usdcIn);
         id = manager.createCDP(debt, usdcIn);
         vm.stopPrank();
+
+        // Longs print 1.20: mark rises to 1.0525, so G/F = 1.10 marks at ~1.045 → Frostbite on resolve.
+        CreditMarket market = protocol.market();
+        vm.startPrank(alice);
+        usdc.approve(address(market), type(uint256).max);
+        market.placeOrder(id, CreditMarket.Side.LongBid, MontaneParams.PAR + MontaneParams.SPREAD, debt);
+        market.placeOrder(id, CreditMarket.Side.LongAsk, 1.2 ether, 10e18);
+        vm.stopPrank();
+        uint256 askId = market.orderCount();
+        vm.startPrank(bob);
+        usdc.approve(address(market), type(uint256).max);
+        market.fillOrder(askId, 10e18);
+        vm.stopPrank();
+        assertLe(position.ratio(id), MontaneParams.FROSTBITE);
     }
 
     function _setPrices(int64 mon, int64 usd) internal {

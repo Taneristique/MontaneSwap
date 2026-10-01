@@ -45,7 +45,6 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
     error Circuit();
     error MinRatio();
     error OnlyCreditMarket();
-    error OnlyLongOwner();
     error Cap();
     error HuntExists();
     error NoHunt();
@@ -57,10 +56,11 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
 
     event CDPCreated(address indexed issuer, uint256 indexed cdpId, uint256 collateral, uint256 debt);
     event Repaid(address indexed issuer, uint256 indexed cdpId);
-    event Novated(uint256 indexed cdpId, address indexed hunter, address indexed priorLong, uint256 w, uint256 b);
+    event Novated(uint256 indexed cdpId, address indexed hunter, address indexed priorIssuer, uint256 bid);
     event WinterLevy(uint256 indexed cdpId, uint256 fee);
     event Waterline(uint256 indexed cdpId, uint256 added, uint256 newG);
-    event Withdrawn(uint256 indexed cdpId, address indexed longOwner, uint256 amount);
+    event Retired(uint256 indexed cdpId, address indexed issuer, uint256 notes);
+    event RedeemedMatured(uint256 indexed cdpId, address indexed holder, uint256 notes, uint256 usdcOut);
     event HuntRequested(uint256 indexed cdpId, address indexed hunter, uint256 bond);
     event HuntSlashed(uint256 indexed cdpId, address indexed hunter, address indexed issuer, uint256 bond);
     event Paused(address indexed account);
@@ -126,7 +126,7 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
         usdc.safeTransferFrom(msg.sender, address(debtToken), g);
 
         cdpId = collateralDebtPosition.createCDP(msg.sender, g, debtAmount);
-        debtToken.issue(address(creditMarket), msg.sender, debtAmount, g);
+        debtToken.mint(address(creditMarket), cdpId, debtAmount);
         creditMarket.seedOnMint(msg.sender, cdpId, debtAmount);
 
         if (address(seasonPool) != address(0)) {
@@ -170,23 +170,43 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
         return MontaneParams.ORIGINATION_BPS;
     }
 
-    /// @notice Long owner after first sale + 24h. Cap = min(G, F * P_mid). δ above mark stays in the box.
-    function withdraw(uint256 cdpId, uint256 amount) external nonReentrant whenNotPaused {
+    /// @notice Issuer buyback: burn notes of your own cell (bought on the book or unsold) to shrink face F.
+    /// @dev Cheap notes make this a real discount on the debt; H = G/F rises. Last note closes via repay.
+    function retire(uint256 cdpId, uint256 amount) external nonReentrant whenNotPaused {
+        ICollateralDebtPosition.CDP memory pos = collateralDebtPosition.getCDP(cdpId);
+        require(pos.active && msg.sender == pos.issuer, "issuer");
+        if (amount == 0 || amount >= pos.debtAmount) revert Cap();
+        if (_isMature(pos)) _settleSeason(cdpId);
+        debtToken.burn(msg.sender, cdpId, amount);
+        collateralDebtPosition.setPosition(cdpId, pos.collateralAmount, pos.debtAmount - amount);
+        emit Retired(cdpId, msg.sender, amount);
+    }
+
+    /// @notice After maturity any holder redeems notes at par from the cell; pro-rata G/F if H < 1.
+    function redeemMatured(uint256 cdpId, uint256 amount) external nonReentrant whenNotPaused {
         ICollateralDebtPosition.CDP memory pos = collateralDebtPosition.getCDP(cdpId);
         require(pos.active, "cdp");
-        if (msg.sender != pos.longOwner) revert OnlyLongOwner();
-        require(pos.firstSaleAt != 0, "unsold");
-        if (block.timestamp < pos.firstSaleAt + MontaneParams.MATURITY) revert NotMature();
-        if (block.number < pos.openBlock + MontaneParams.MIN_BLOCKS) revert NotMature();
+        if (!_isMature(pos)) revert NotMature();
+        if (amount == 0 || amount > pos.debtAmount) revert Cap();
+        _settleSeason(cdpId);
+        creditMarket.settleShortsCdp(cdpId);
 
-        uint256 mark = (pos.debtAmount * creditMarket.pMid()) / MontaneParams.WAD;
-        uint256 cap = pos.collateralAmount < mark ? pos.collateralAmount : mark;
-        if (amount == 0 || amount > cap) revert Cap();
+        uint256 pay = pos.collateralAmount >= pos.debtAmount
+            ? amount
+            : (amount * pos.collateralAmount) / pos.debtAmount;
+        debtToken.burn(msg.sender, cdpId, amount);
+        uint256 newG = pos.collateralAmount - pay;
+        uint256 newF = pos.debtAmount - amount;
+        collateralDebtPosition.setPosition(cdpId, newG, newF);
+        debtToken.payOut(msg.sender, pay);
+        emit RedeemedMatured(cdpId, msg.sender, amount, pay);
 
-        uint256 newG = pos.collateralAmount - amount;
-        debtToken.withdrawCell(pos.issuer, msg.sender, amount);
-        collateralDebtPosition.setCollateral(cdpId, newG);
-        emit Withdrawn(cdpId, msg.sender, amount);
+        if (newF == 0) {
+            _unwindBook(cdpId, pos.issuer);
+            collateralDebtPosition.repayCDP(cdpId);
+            debtToken.payOut(pos.issuer, newG);
+            emit Repaid(pos.issuer, cdpId);
+        }
     }
 
     /// @notice Frostbite only. During maturity: lock B and wait. After maturity: novate now.
@@ -299,7 +319,6 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
         for (uint256 i = 0; i < filled && left > 0; i++) {
             uint256 give = needs[i] < left ? needs[i] : left;
             ICollateralDebtPosition.CDP memory c = collateralDebtPosition.getCDP(ids[i]);
-            debtToken.inject(c.issuer, give);
             uint256 newG = c.collateralAmount + give;
             collateralDebtPosition.setCollateral(ids[i], newG);
             emit Waterline(ids[i], give, newG);
@@ -335,43 +354,37 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
         return (collateralDebtPosition.frostbiteCount() * MontaneParams.WAD) / n;
     }
 
+    /// @dev Repay at par: every outstanding note gets 1 USDC (pro-rata if G < F); issuer keeps the rest.
     function _closePosition(uint256 cdpId, ICollateralDebtPosition.CDP memory pos) internal {
         // Season must settle first — blocks repay while market immature; auto-resolves when mature.
-        if (address(seasonPool) != address(0)) {
-            seasonPool.ensureSettled(cdpId);
-        }
+        _settleSeason(cdpId);
 
         if (huntRequest[cdpId].pending) {
             _slashHunt(cdpId, pos.issuer);
         }
 
-        creditMarket.forceCoverCdp(cdpId);
-        creditMarket.scrubCdp(cdpId);
-        creditMarket.returnUnsoldTo(pos.issuer, cdpId);
+        _unwindBook(cdpId, pos.issuer);
 
-        uint256 face = pos.debtAmount;
+        uint256 own = debtToken.balanceOf(pos.issuer, cdpId);
+        if (own > 0) debtToken.burn(pos.issuer, cdpId, own);
+        uint256 outstanding = debtToken.totalSupply(cdpId);
         uint256 g = pos.collateralAmount;
-        // Mark-to-market of face at book mid. No floor on mark: `cap = min(G, mark)` already
-        // bounds cell payout. A depressed mid underpays the long vs par; that is intentional.
-        uint256 mark = (face * creditMarket.pMid()) / MontaneParams.WAD;
-        uint256 cap = g < mark ? g : mark;
-
-        address long = pos.longOwner;
-        if (long != pos.issuer) {
-            uint256 held = debtToken.balanceOf(long);
-            if (held > face) held = face;
-            if (held > 0) {
-                uint256 pay = (cap * held) / face;
-                debtToken.burnFrom(long, held);
-                if (pay > 0) {
-                    debtToken.withdrawCell(pos.issuer, long, pay);
-                }
-            }
-        }
+        uint256 reserve = g < outstanding ? g : outstanding;
 
         collateralDebtPosition.repayCDP(cdpId);
-        debtToken.repay(pos.issuer, face);
+        debtToken.openRedemption(cdpId, reserve);
+        debtToken.payOut(pos.issuer, g - reserve);
         lastRepaidAt[pos.issuer] = block.timestamp;
+    }
+
+    function _unwindBook(uint256 cdpId, address issuer) internal {
+        creditMarket.settleShortsCdp(cdpId);
+        creditMarket.returnUnsoldTo(issuer, cdpId);
+        creditMarket.scrubCdp(cdpId);
+    }
+
+    function _settleSeason(uint256 cdpId) internal {
+        if (address(seasonPool) != address(0)) seasonPool.ensureSettled(cdpId);
     }
 
     function _novate(
@@ -402,11 +415,14 @@ contract CDPManager is ICDPManager, Ownable2Step, ReentrancyGuard {
             usdc.safeTransferFrom(hunter, address(debtToken), p);
         }
 
-        uint256 w = pos.collateralAmount < p ? pos.collateralAmount : p;
-        debtToken.novateCell(pos.issuer, pos.longOwner, w, p);
-        collateralDebtPosition.setCollateral(cdpId, debtToken.underlyingCollateral(pos.issuer));
+        // Hunter recapitalises the cell and takes the issuer seat; prior issuer's margin stays in G.
+        collateralDebtPosition.setCollateral(cdpId, pos.collateralAmount + p);
+        // Unsold seed inventory belongs to the issuer seat, not the ousted issuer.
+        creditMarket.returnUnsoldTo(hunter, cdpId);
         collateralDebtPosition.liquidateCDP(hunter, cdpId);
-        emit Novated(cdpId, hunter, pos.longOwner, w, p);
+        PositionCDPID[hunter] = cdpId;
+        CDPPositionIssuer[cdpId] = hunter;
+        emit Novated(cdpId, hunter, pos.issuer, p);
     }
 
     function _slashHunt(uint256 cdpId, address issuer) internal {

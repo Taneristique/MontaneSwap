@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {IMontaneMonad} from "./interfaces/IMontaneMonad.sol";
 import {ICollateralDebtPosition} from "./interfaces/ICollateralDebtPosition.sol";
+import {ICreditMarket} from "./interfaces/ICreditMarket.sol";
 import {MontaneParams} from "./helpers/MontaneParams.sol";
 
 contract CollateralDebtPosition is ICollateralDebtPosition {
@@ -108,25 +109,38 @@ contract CollateralDebtPosition is ICollateralDebtPosition {
         _removeActive(cdpId);
     }
 
-    /// @dev Accounting only. USDC movement lives on MontaneMonad.novateCell.
-    /// @dev Starts the long withdraw clock if the note never traded (hunter must be able to exit).
+    /// @dev Novation: the hunter becomes the cell's issuer (residual claim). Notes and holders are untouched.
     function liquidateCDP(address liquidator, uint256 cdpId) external {
         if (msg.sender != cdpManager) revert OnlyCDPManager();
         CDP storage c = cdpMap[cdpId];
         if (!c.active) revert CDPMissing();
-        c.longOwner = liquidator;
+        if (hasActiveCDP[liquidator]) revert CDPAlreadyExists();
+        hasActiveCDP[c.issuer] = false;
+        hasActiveCDP[liquidator] = true;
+        positionOf[liquidator] = cdpId;
+        c.issuer = liquidator;
         if (c.firstSaleAt == 0) c.firstSaleAt = block.timestamp;
     }
 
     function setCollateral(uint256 cdpId, uint256 g) external {
         if (msg.sender != cdpManager) revert OnlyCDPManager();
+        _setPosition(cdpId, g, cdpMap[cdpId].debtAmount);
+    }
+
+    /// @dev Face shrinks on issuer retire and holder redemption at maturity.
+    function setPosition(uint256 cdpId, uint256 g, uint256 f) external {
+        if (msg.sender != cdpManager) revert OnlyCDPManager();
+        _setPosition(cdpId, g, f);
+    }
+
+    function _setPosition(uint256 cdpId, uint256 g, uint256 f) private {
         CDP storage c = cdpMap[cdpId];
-        uint256 debt = c.debtAmount;
-        bool wasFrost = _isFrost(c.collateralAmount, debt);
+        bool wasFrost = _isFrost(c.collateralAmount, c.debtAmount);
         bool wasLine = _waterlineIndex[cdpId] != 0;
         c.collateralAmount = g;
-        bool nowFrost = _isFrost(g, debt);
-        bool nowLine = _waterlineNeed(g, debt) > 0;
+        c.debtAmount = f;
+        bool nowFrost = _isFrost(g, f);
+        bool nowLine = _waterlineNeed(g, f) > 0;
         if (wasFrost && !nowFrost) {
             unchecked {
                 --frostbiteCount;
@@ -143,17 +157,23 @@ contract CollateralDebtPosition is ICollateralDebtPosition {
         }
     }
 
+    /// @notice Marked health H = G / (F × P): collateral over the USDC value of the notes at the mMonad mark.
     function health(uint256 cdpId) public view returns (uint256) {
         CDP storage c = cdpMap[cdpId];
         if (!c.active || c.debtAmount == 0) revert CDPMissing();
-        return (c.collateralAmount * MontaneParams.WAD) / c.debtAmount;
+        return _marked(c.collateralAmount, c.debtAmount);
     }
 
-    /// @dev Same G/F as health, but allowed after repay — Season must still resolve.
+    /// @dev Same marked H as health, but allowed after repay — Season must still resolve.
     function ratio(uint256 cdpId) public view returns (uint256) {
         CDP storage c = cdpMap[cdpId];
         if (c.debtAmount == 0) revert CDPMissing();
-        return (c.collateralAmount * MontaneParams.WAD) / c.debtAmount;
+        return _marked(c.collateralAmount, c.debtAmount);
+    }
+
+    function _marked(uint256 g, uint256 f) private view returns (uint256) {
+        uint256 p = ICreditMarket(creditMarket).pMid();
+        return (g * MontaneParams.WAD * MontaneParams.WAD) / (f * p);
     }
 
     function getCDP(uint256 cdpId) external view returns (CDP memory) {

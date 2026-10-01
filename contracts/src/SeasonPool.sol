@@ -5,11 +5,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ICollateralDebtPosition} from "./interfaces/ICollateralDebtPosition.sol";
+import {ICreditMarket} from "./interfaces/ICreditMarket.sol";
 import {ISeasonPool} from "./interfaces/ISeasonPool.sol";
 import {MontaneParams} from "./helpers/MontaneParams.sol";
 
+interface IManagerMarket {
+    function creditMarket() external view returns (address);
+}
+
 /// @notice Oracle-free season satellite on a cell. Opened on mint; maturity follows cell clock.
 /// @dev Directional 1:1 buys in the first 12h after CDP open. Hedge packs until cell maturity.
+/// @dev VERDANT iff the cell's marked health H = G / (F × pMid) is above 1.10 at resolve.
 contract SeasonPool is ISeasonPool, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -42,6 +48,9 @@ contract SeasonPool is ISeasonPool, ReentrancyGuard {
     mapping(uint256 => mapping(address => uint256)) public verdantOf;
     mapping(uint256 => mapping(address => uint256)) public frostbiteOf;
     mapping(uint256 => mapping(address => bool)) public claimed;
+    /// @dev mMonad mark (pMid) and marked H recorded at resolve.
+    mapping(uint256 => uint256) public settleMark;
+    mapping(uint256 => uint256) public settleHealth;
 
     event MarketOpened(uint256 indexed marketId, uint256 indexed cdpId, address issuer, uint256 maturity);
     event DirectionalMinted(uint256 indexed marketId, address indexed to, bool verdant, uint256 amount);
@@ -49,6 +58,7 @@ contract SeasonPool is ISeasonPool, ReentrancyGuard {
     event Resolved(uint256 indexed marketId, bool verdantWins, uint256 loserPot);
     event Claimed(uint256 indexed marketId, address indexed who, uint256 payout);
     event DustSwept(uint256 indexed marketId, uint256 amount);
+    event SettledBy(uint256 indexed marketId, uint256 mark, uint256 health);
 
     error BadCdp();
     error Exists();
@@ -137,8 +147,8 @@ contract SeasonPool is ISeasonPool, ReentrancyGuard {
         emit PackMinted(marketId, msg.sender, each);
     }
 
-    /// @notice After cell maturity: H > 1.10 → VERDANT; else FROSTBITE. Loser pot 10/10/80.
-    /// @dev Uses `ratio` so resolve still works if the cell was closed early (legacy stuck path).
+    /// @notice After cell maturity: VERDANT iff H > 1.10 and note TWAP >= par. Loser pot 10/10/80.
+    /// @dev Thin book (few fills / low volume) decides on H > 1.10 alone via `ratio`.
     function resolve(uint256 marketId) external nonReentrant {
         Market storage m = markets[marketId];
         if (m.cdpId == 0 || m.resolved) revert Closed();
@@ -218,8 +228,7 @@ contract SeasonPool is ISeasonPool, ReentrancyGuard {
 
     function _resolve(uint256 marketId) internal {
         Market storage m = markets[marketId];
-        uint256 h = cdp.ratio(m.cdpId);
-        bool verdantWins = h > MontaneParams.FROSTBITE;
+        bool verdantWins = _verdantWins(marketId, m.cdpId);
         m.resolved = true;
         m.verdantWins = verdantWins;
 
@@ -246,5 +255,14 @@ contract SeasonPool is ISeasonPool, ReentrancyGuard {
         }
 
         emit Resolved(marketId, verdantWins, loserPot);
+    }
+
+    function _verdantWins(uint256 marketId, uint256 cdpId) internal returns (bool) {
+        uint256 mark = ICreditMarket(IManagerMarket(manager).creditMarket()).pMid();
+        uint256 h = cdp.ratio(cdpId);
+        settleMark[marketId] = mark;
+        settleHealth[marketId] = h;
+        emit SettledBy(marketId, mark, h);
+        return h > MontaneParams.FROSTBITE;
     }
 }

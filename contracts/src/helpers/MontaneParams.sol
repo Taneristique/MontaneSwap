@@ -16,6 +16,8 @@ library MontaneParams {
     uint256 public constant MATURITY = 1 days;
     uint256 public constant MIN_BLOCKS = 3;
     uint256 public constant SPREAD = 5e15;
+    /// @dev Long-book prices stay at least this far above the last short-book price, and vice versa.
+    uint256 public constant LONG_SHORT_GAP = 1e17;
     uint256 public constant CIRCUIT_BPS = 150;
     uint256 public constant V100_MIN = 5000e18;
     /// @dev Same width as circuit. +20% / −15% could never fire while the book freezes at ±1.5%.
@@ -31,10 +33,19 @@ library MontaneParams {
     uint256 public constant MATCH_FILL_MAX = 32;
     /// @dev Cap per side of `_live` — bounds liveBook / match gather gas.
     uint256 public constant LIVE_PER_SIDE_MAX = 64;
-    /// @dev Cap unique short holders per cell — bounds `forceCoverCdp`.
-    uint256 public constant SHORT_HOLDERS_MAX = 64;
     /// @dev Max waterline ids scanned per `injectWaterline` (batch still ≤ WATERLINE_BATCH).
     uint256 public constant WATERLINE_SCAN_MAX = 256;
+    /// @dev Season price rule: VERDANT if the cell's note TWAP to maturity is >= SEASON_LINE.
+    uint256 public constant SEASON_LINE = PAR;
+    /// @dev Below either threshold the book is too thin to trust; Season falls back to H = G/F.
+    uint256 public constant SEASON_MIN_FILLS = 3;
+    uint256 public constant SEASON_MIN_VOL_BPS = 1_000;
+    /// @dev Max move one fill can make to the recorded note price, vs the previous recorded price.
+    uint256 public constant NOTE_STEP_BPS = 100;
+    /// @dev Fills smaller than this share of face do not touch the note tape, so dust prints cannot walk the price.
+    uint256 public constant NOTE_MIN_FILL_BPS = 100;
+    /// @dev Open short-book units per cell are capped at this share of face.
+    uint256 public constant SHORT_OI_BPS = 5_000;
 
     bytes32 public constant MON_USD_FEED_ID =
         0x31491744e2dbf6df7fcf4ac0820d18a609b49076d45066d3568424e62f686cd1;

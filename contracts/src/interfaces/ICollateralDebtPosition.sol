@@ -25,6 +25,8 @@ interface ICollateralDebtPosition {
 
     function setCollateral(uint256 cdpId, uint256 g) external;
 
+    function setPosition(uint256 cdpId, uint256 g, uint256 f) external;
+
     function health(uint256 cdpId) external view returns (uint256);
 
     /// @dev G/F even if inactive — Season resolve escape when cell already closed.

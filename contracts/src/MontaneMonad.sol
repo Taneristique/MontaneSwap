@@ -1,91 +1,104 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC1155} from "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
+import {ERC1155Supply} from "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
+import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IMontaneMonad} from "./interfaces/IMontaneMonad.sol";
 import {MontaneAccess} from "./helpers/MontaneAccess.sol";
 import {MontaneParams} from "./helpers/MontaneParams.sol";
 
-contract MontaneMonad is ERC20, IMontaneMonad, MontaneAccess {
+/// @notice mMonad notes, one ERC-1155 id per cell (id = cdpId). 1 note = claim on 1 USDC of that cell at par.
+/// @dev Holds every cell's USDC collateral. Cell G/F bookkeeping lives in CollateralDebtPosition.
+/// @dev CreditMarket and CDPManager are built-in operators: they only move notes of the caller they act for.
+contract MontaneMonad is ERC1155Supply, IMontaneMonad, MontaneAccess, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    string public constant name = "MontaneMonad";
+    string public constant symbol = "mMonad";
 
     IERC20 public immutable override usdc;
     uint256 public issuanceCost;
-    mapping(address => uint256) public underlyingCollateral;
-    mapping(address => uint256) public issuedDebt;
+    /// @dev USDC reserved for holders after the issuer closes the cell.
+    mapping(uint256 => uint256) public redeemPool;
+    mapping(uint256 => bool) public redeemOpen;
 
-    error NovationHole();
+    event RedemptionOpened(uint256 indexed cdpId, uint256 reserve, uint256 outstanding);
+    event Redeemed(uint256 indexed cdpId, address indexed holder, uint256 notes, uint256 usdcOut);
 
-    function cdpManager() public view override(MontaneAccess, IMontaneMonad) returns (address) {
-        return MontaneAccess.cdpManager();
-    }
+    error RedeemClosed();
+    error NothingToRedeem();
 
     constructor(address _cdpManager, address _creditMarket, address _usdc)
-        ERC20("MontaneMonad", "mMonad")
+        ERC1155("")
         MontaneAccess(_cdpManager, _creditMarket)
     {
         usdc = IERC20(_usdc);
         issuanceCost = MontaneParams.PAR;
     }
 
-    /// @dev Tokens go to `tokenTo` (CLOB escrow). Collateral and debt stick to `owner` (issuer).
-    function issue(address tokenTo, address owner, uint256 amount, uint256 collateral) public onlyCDPManager {
-        underlyingCollateral[owner] += collateral;
-        issuedDebt[owner] += amount;
-        _mint(tokenTo, amount);
+    function cdpManager() public view override(MontaneAccess, IMontaneMonad) returns (address) {
+        return MontaneAccess.cdpManager();
     }
 
-    /// @dev Cell novation: prior long receives `toLong` USDC; hunter `bid` stays in the cell. Debt is not burned.
-    function novateCell(address owner, address longOwner, uint256 toLong, uint256 bid) public onlyCDPManager {
-        uint256 g = underlyingCollateral[owner];
-        if (toLong > g) revert NovationHole();
-        underlyingCollateral[owner] = g - toLong + bid;
-        if (toLong > 0) usdc.safeTransfer(longOwner, toLong);
+    function totalSupply(uint256 cdpId) public view override(ERC1155Supply, IMontaneMonad) returns (uint256) {
+        return ERC1155Supply.totalSupply(cdpId);
     }
 
-    function burnFrom(address from, uint256 amount) public onlyCDPManager {
-        require(amount > 0, "zero");
-        _burn(from, amount);
+    function isApprovedForAll(address account, address operator)
+        public
+        view
+        override(ERC1155, IERC1155)
+        returns (bool)
+    {
+        if (operator == _creditMarket || operator == _cdpManager) return true;
+        return super.isApprovedForAll(account, operator);
     }
 
-    /// @dev Clears debt and returns leftover G. Burns only what `owner` still holds.
-    function repay(address owner, uint256 amount) public onlyCDPManager {
-        require(issuedDebt[owner] == amount, "debt mismatch");
-        issuedDebt[owner] = 0;
-        uint256 held = balanceOf(owner);
-        if (held > 0) {
-            uint256 burnAmt = held < amount ? held : amount;
-            _burn(owner, burnAmt);
-        }
-        uint256 col = underlyingCollateral[owner];
-        underlyingCollateral[owner] = 0;
-        if (col > 0) usdc.safeTransfer(owner, col);
+    function mint(address to, uint256 cdpId, uint256 amount) external onlyCDPManager {
+        _mint(to, cdpId, amount, "");
     }
 
-    function pullUsdc(address to, uint256 amount) public {
+    function burn(address from, uint256 cdpId, uint256 amount) external onlyCDPManager {
+        _burn(from, cdpId, amount);
+    }
+
+    function payOut(address to, uint256 amount) external onlyCDPManager {
+        if (amount > 0) usdc.safeTransfer(to, amount);
+    }
+
+    function pullUsdc(address to, uint256 amount) external {
         require(msg.sender == _cdpManager || msg.sender == _creditMarket, "pull");
         usdc.safeTransfer(to, amount);
     }
 
-    function inject(address owner, uint256 amount) public onlyCDPManager {
-        require(amount > 0, "zero");
-        underlyingCollateral[owner] += amount;
+    /// @dev Called once when the issuer closes the cell; `reserve` = min(G, outstanding) at par.
+    function openRedemption(uint256 cdpId, uint256 reserve) external onlyCDPManager {
+        redeemOpen[cdpId] = true;
+        redeemPool[cdpId] = reserve;
+        emit RedemptionOpened(cdpId, reserve, totalSupply(cdpId));
     }
 
-    function withdrawCell(address owner, address to, uint256 amount) public onlyCDPManager {
-        uint256 g = underlyingCollateral[owner];
-        require(amount > 0 && amount <= g, "cell");
-        underlyingCollateral[owner] = g - amount;
-        usdc.safeTransfer(to, amount);
+    /// @notice Burn all your notes of a closed cell for your pro-rata share of its reserve (par if fully backed).
+    function redeem(uint256 cdpId) external nonReentrant returns (uint256 out) {
+        if (!redeemOpen[cdpId]) revert RedeemClosed();
+        uint256 held = balanceOf(msg.sender, cdpId);
+        if (held == 0) revert NothingToRedeem();
+        out = (redeemPool[cdpId] * held) / totalSupply(cdpId);
+        redeemPool[cdpId] -= out;
+        _burn(msg.sender, cdpId, held);
+        if (out > 0) usdc.safeTransfer(msg.sender, out);
+        emit Redeemed(cdpId, msg.sender, held, out);
     }
 
-    function setIssuanceCost(uint256 _issuanceCost) public onlyCreditMarket {
+    function setIssuanceCost(uint256 _issuanceCost) external onlyCreditMarket {
         issuanceCost = _issuanceCost;
     }
 
-    function getIssuanceCost() public view returns (uint256) {
+    function getIssuanceCost() external view returns (uint256) {
         return issuanceCost;
     }
 }
