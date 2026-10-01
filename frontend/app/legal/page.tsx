@@ -40,9 +40,6 @@ export default function LegalPage() {
             Swap interface and related smart contracts published in connection with ZKCTF /
             MontaneSwap. By accessing the app you agree to this page.
           </p>
-          <p className="mt-2 text-xs text-zinc-500">
-            © 2026 ZKCTF. All rights reserved by MontaneSwap.
-          </p>
         </header>
 
         <section id="terms" className="scroll-mt-24 space-y-3">
@@ -133,7 +130,7 @@ export default function LegalPage() {
             Intellectual property
           </h2>
           <p>
-            Branding, UI, and documentation are © 2026 ZKCTF / MontaneSwap unless otherwise
+            Branding, UI, and documentation are © 2026 MontaneSwap unless otherwise
             noted. Third-party marks (including wallet and chain brands) belong to their
             owners. Source code licensing, if published, is stated in the relevant repository.
           </p>
@@ -144,7 +141,7 @@ export default function LegalPage() {
           <p>
             Project presence:{" "}
             <a
-              href="https://github.com/Taneristique"
+              href="https://github.com/Taneristique/MontaneSwap"
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium underline-offset-2 hover:underline"
@@ -153,10 +150,6 @@ export default function LegalPage() {
             </a>
             . For security issues, prefer responsible disclosure via the GitHub profile or
             channels listed in the repository when available.
-          </p>
-          <p className="text-xs text-zinc-500">
-            This page is a protective notice for an experimental hackathon / research
-            interface. It is not a substitute for counsel in your jurisdiction.
           </p>
           <p>
             <Link href="/" className="underline-offset-2 hover:underline">

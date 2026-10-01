@@ -39,7 +39,7 @@ export function Footer() {
             Docs
           </Link>
           <a
-            href="https://github.com/Taneristique"
+            href="https://github.com/Taneristique/MontaneSwap"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex min-h-9 items-center gap-2 rounded-full border border-zinc-200 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-950/5 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/10"
