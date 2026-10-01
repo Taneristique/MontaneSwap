@@ -82,6 +82,17 @@ export default function CellPage() {
     query: { enabled: Boolean(protocol.position), refetchInterval: 4000 },
   });
 
+  const seated = useReadContract({
+    address: protocol.position,
+    abi: cdpAbi,
+    functionName: "hasActiveCDP",
+    args: account ? [account] : undefined,
+    chainId: monadTestnet.id,
+    query: { enabled: Boolean(protocol.position && account), refetchInterval: 4000 },
+  });
+  /** One active cell per address: novation seats the hunter as issuer, so a seated wallet can't hunt. */
+  const alreadyIssuer = seated.data === true;
+
   const last = Number(nextId.data ?? 0n);
   const ids = useMemo(() => Array.from({ length: last }, (_, i) => BigInt(i + 1)), [last]);
 
@@ -268,7 +279,7 @@ export default function CellPage() {
         const winterFee =
           c.hOn != null && c.hOn <= PAR ? (bond * WINTER_BPS) / 10_000n : 0n;
         const usdcNeed = bond + winterFee;
-        const canHunt = frostOn || c.huntPending;
+        const canHunt = c.huntPending || (frostOn && !alreadyIssuer);
         const isIssuer = me != null && c.cdp.issuer.toLowerCase() === me;
         const retireAmt = c.mine < c.cdp.debtAmount ? c.mine : c.cdp.debtAmount - 1n;
         const redeemOut =
@@ -404,7 +415,9 @@ export default function CellPage() {
                       : `Hunt · resolve in ${formatRemain(c.remain)}`
                     : !frostOn
                       ? "Hunt · need on-chain Frostbite"
-                      : c.mature
+                      : alreadyIssuer
+                        ? "Hunt · this wallet already issues a cell"
+                        : c.mature
                         ? "Hunt · instant liquidate"
                         : "Hunt · request, lock B"}
               </button>

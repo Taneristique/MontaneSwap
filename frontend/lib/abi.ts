@@ -331,6 +331,13 @@ export const cdpAbi = [
   },
   {
     type: "function",
+    name: "hasActiveCDP",
+    stateMutability: "view",
+    inputs: [{ name: "who", type: "address" }],
+    outputs: [{ type: "bool" }],
+  },
+  {
+    type: "function",
     name: "getCDP",
     stateMutability: "view",
     inputs: [{ name: "cdpId", type: "uint256" }],

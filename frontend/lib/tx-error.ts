@@ -22,6 +22,8 @@ const REASONS: Record<string, string> = {
     "Price is inside the spread: long orders must be ≥ last short + 0.10, short orders ≤ last long − 0.10.",
   InstantHunt: "Instant liquidate only after maturity (first sale/mint + 24h and ≥3 blocks).",
   HunterSelf: "Issuer cannot hunt their own cell.",
+  CDPAlreadyExists:
+    "This wallet already issues an active cell (one per address). Hunt from a wallet without a cell, or repay yours first.",
   HuntExists: "A hunt is already pending on this cell.",
   NoHunt: "No hunt pending on this cell.",
   MinRatio: "Collateral too low: H must be at least 1.10 at issue.",

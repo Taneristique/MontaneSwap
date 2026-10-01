@@ -15,6 +15,7 @@ export const protocolErrors = parseAbi([
   "error FomoSilent()",
   "error Frozen()",
   "error HunterSelf()",
+  "error CDPAlreadyExists()",
   "error HuntExists()",
   "error InactiveCdp()",
   "error InstantHunt()",
