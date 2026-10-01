@@ -1,33 +1,27 @@
 "use client";
 
 import { useMemo } from "react";
-import { useReadContract } from "wagmi";
-import { creditMarketAbi, Side } from "./abi";
+import { useReadContracts } from "wagmi";
+import { creditMarketAbi } from "./abi";
 import { fromWad } from "./format";
 import { monadTestnet } from "./wagmi";
 import type { Address } from "viem";
 
-type Live = {
-  id: bigint;
-  maker: Address;
-  cdpId: bigint;
-  side: number;
-  price: bigint;
-  remaining: bigint;
-  fomo: boolean;
-  landedAt: bigint;
-};
+/** Minimum distance between the long and short books (LONG_SHORT_GAP on-chain). */
+export const LONG_SHORT_GAP = 10n ** 17n;
 
 /**
- * displayPx / markPx — live long book first, then last trade, then chain.
- * Never let a stale print (e.g. 1.48) override a live ask at 1.005.
+ * P_mid is the on-chain mMonad mark: (last long fill + last short fill) / 2.
+ * Every cell's health is marked against it: H = G / (F × P_mid).
  */
 export function useDisplayMid(market?: Address, lastTradePx?: bigint) {
-  const chainMid = useReadContract({
-    address: market,
-    abi: creditMarketAbi,
-    functionName: "pMid",
-    chainId: monadTestnet.id,
+  const reads = useReadContracts({
+    contracts: (["pMid", "lastLongPx", "lastShortPx"] as const).map((functionName) => ({
+      address: market,
+      abi: creditMarketAbi,
+      functionName,
+      chainId: monadTestnet.id,
+    })),
     query: {
       enabled: Boolean(market),
       refetchInterval: 3000,
@@ -35,88 +29,36 @@ export function useDisplayMid(market?: Address, lastTradePx?: bigint) {
       refetchOnReconnect: true,
     },
   });
-  const live = useReadContract({
-    address: market,
-    abi: creditMarketAbi,
-    functionName: "liveBook",
-    chainId: monadTestnet.id,
-    query: {
-      enabled: Boolean(market),
-      refetchInterval: 3000,
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
-    },
-  });
-
-  const book = (live.data ?? []) as Live[];
 
   const derived = useMemo(() => {
-    let bestLongAsk = 0n;
-    let bestLongBid = 0n;
-    let bestShortAsk = 0n;
-    let bestShortBid = 0n;
-    for (const o of book) {
-      if (o.remaining === 0n) continue;
-      if (o.side === Side.LongAsk && (bestLongAsk === 0n || o.price < bestLongAsk)) {
-        bestLongAsk = o.price;
-      }
-      if (o.side === Side.LongBid && o.price > bestLongBid) bestLongBid = o.price;
-      if (o.side === Side.ShortAsk && (bestShortAsk === 0n || o.price < bestShortAsk)) {
-        bestShortAsk = o.price;
-      }
-      if (o.side === Side.ShortBid && o.price > bestShortBid) bestShortBid = o.price;
-    }
-
-    const par = 10n ** 18n;
-    const chain = chainMid.data && chainMid.data > 0n ? chainMid.data : par;
-
-    let source: "long" | "cross" | "last" | "ask" | "bid" | "chain" = "chain";
-    let px = chain;
-
-    if (bestLongAsk > 0n && bestLongBid > 0n) {
-      px = (bestLongAsk + bestLongBid) / 2n;
-      source = "long";
-    } else if (bestLongAsk > 0n) {
-      px = bestLongAsk;
-      source = "ask";
-    } else if (bestLongBid > 0n && bestShortBid > 0n) {
-      px = (bestLongBid + bestShortBid) / 2n;
-      source = "cross";
-    } else if (bestLongBid > 0n) {
-      px = bestLongBid;
-      source = "bid";
-    } else if (lastTradePx && lastTradePx > 0n) {
-      px = lastTradePx;
-      source = "last";
-    }
-
-    // H@mark tracks the same live mark as P_mid (book > last).
-    const markPx = px;
-    const markSource = source;
-
+    const [mid, long, short] = (reads.data ?? []).map((r) =>
+      r.status === "success" ? (r.result as bigint) : 0n,
+    );
+    const px = mid && mid > 0n ? mid : 10n ** 18n;
+    const lastLong = long ?? 0n;
+    const lastShort = short ?? 0n;
     return {
       px,
-      markPx,
+      markPx: px,
       label: fromWad(px),
-      markLabel: fromWad(markPx),
-      source,
-      markSource,
-      chainLabel: chainMid.data != null ? fromWad(chainMid.data) : "—",
+      markLabel: fromWad(px),
+      source: "chain" as const,
+      markSource: "last long + last short" as const,
+      chainLabel: mid ? fromWad(mid) : "—",
       lastLabel: lastTradePx && lastTradePx > 0n ? fromWad(lastTradePx) : null,
-      bestLongAsk,
-      bestLongBid,
-      bestShortAsk,
-      bestShortBid,
+      lastLong,
+      lastShort,
+      /** Lowest price a long order may carry. */
+      longFloor: lastShort > 0n ? lastShort + LONG_SHORT_GAP : 0n,
+      /** Highest price a short order may carry. */
+      shortCap: lastLong > LONG_SHORT_GAP ? lastLong - LONG_SHORT_GAP : 0n,
     };
-  }, [book, chainMid.data, lastTradePx]);
+  }, [reads.data, lastTradePx]);
 
-  return {
-    ...derived,
-    loading: chainMid.isLoading || live.isLoading,
-  };
+  return { ...derived, loading: reads.isLoading };
 }
 
-/** Mark health: G / (F × P_mark). On-chain health() is G/F only. */
+/** Marked health: G / (F × P_mid) — the same formula as on-chain health(). */
 export function markHealth(collateral: bigint, debt: bigint, pMid: bigint) {
   if (debt === 0n || pMid === 0n) return 0n;
   return (collateral * 10n ** 18n * 10n ** 18n) / (debt * pMid);

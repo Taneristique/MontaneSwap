@@ -42,8 +42,10 @@ export default function DocsPage() {
           <p className="mt-3 max-w-2xl">
             Montane Swap is a <strong className="font-medium text-zinc-900 dark:text-zinc-200">debt-note book</strong> on
             Monad. You post USDC, mint an <code className="font-mono text-xs">mMonad</code> note
-            (not $MON), seed long and short books, and settle risk with fixed maturity —
-            repay, hunt, or season bets. The drawer stays the drawer.
+            (not $MON), trade it on a long book, bet on its price on a short book, and settle
+            risk with fixed maturity —
+            repay, hunt, or season bets. Every holder of a cell&apos;s notes is paid at par
+            when it repays or matures.
           </p>
           <p className="mt-3 max-w-2xl text-xs text-zinc-500">
             Inspired by clear product docs such as{" "}
@@ -70,16 +72,17 @@ export default function DocsPage() {
           <ul className="list-disc space-y-2 pl-5">
             <li>
               <strong className="font-medium text-zinc-900 dark:text-zinc-200">Issue</strong> —
-              overcollateralized cells with transparent health G/F.
+              overcollateralized cells whose health is marked to the mMonad price.
             </li>
             <li>
               <strong className="font-medium text-zinc-900 dark:text-zinc-200">Trade</strong> —
-              a CLOB where long and short never cross each other.
+              a CLOB: real notes on the long book, a cash-settled note-price future on the
+              short book.
             </li>
             <li>
               <strong className="font-medium text-zinc-900 dark:text-zinc-200">Season</strong> —
-              an optional oracle-free parimutuel on the same cell’s season (satellite, not a
-              replacement for the book).
+              an optional parimutuel, with no external oracle, on whether a cell&apos;s marked health
+              holds above 1.10 at maturity (satellite, not a replacement for the book).
             </li>
           </ul>
         </section>
@@ -90,9 +93,9 @@ export default function DocsPage() {
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {[
-              { t: "Issue", d: "Mint a cell, seed both books, stay the issuer.", h: "/issue" },
+              { t: "Issue", d: "Mint a cell, list its notes, stay the issuer.", h: "/issue" },
               { t: "Trade", d: "Buy/sell long or short; lift asks, hit bids.", h: "/trade" },
-              { t: "Cell", d: "Hunt, repay, watch H @ mark vs on-chain H.", h: "/cell" },
+              { t: "Cell", d: "Hunt and repay; watch H = G/(F·P) move with the price.", h: "/cell" },
               { t: "Season", d: "Hedge packs + directional season bets.", h: "/season" },
               { t: "Portfolio", d: "Your debt, notes, orders, shorts, packs.", h: "/portfolio" },
             ].map((x) => (
@@ -113,15 +116,26 @@ export default function DocsPage() {
             Issue a cell
           </h2>
           <p>
-            Anyone with USDC can mint. Collateral G and face F set health{" "}
-            <code className="font-mono text-xs">H = G / F</code>. Mint requires H ≥ 1.10
-            (Frostbite floor). First mint fee is <strong>25 bps</strong>. If you repaid and
-            remint within 48h, fee is <strong>1 bp</strong> (roll).
+            Anyone with USDC can mint. Health is marked to the mMonad price:{" "}
+            <code className="font-mono text-xs">H = G / (F × P_mid)</code>, where G is the
+            collateral, F the face and P_mid the mMonad price in USDC. Mint requires G/F ≥ 1.10 so
+            every note stays backed at par. First mint fee is <strong>25 bps</strong>. If you
+            repaid and remint within 48h, fee is <strong>1 bp</strong> (roll).
           </p>
           <p>
-            On mint the market seeds a <strong>long ask at 1.005</strong> and a{" "}
-            <strong>short ask at 0.995</strong> for the full face. Long ask escrows real
-            mMonad; short ask is notional capacity against that cell.
+            The issuer owes mMonad, so the price is their risk. When mMonad gets more expensive,
+            the same collateral covers less of the debt and H falls toward Frostbite; when it
+            gets cheaper, H rises.
+          </p>
+          <p>
+            On mint the cell&apos;s notes (mMonad id = cell id) are escrowed in the market and
+            listed as a <strong>long ask at 1.005</strong> for the full face. The short book
+            starts empty.
+          </p>
+          <p>
+            <strong>Retire:</strong> before maturity the issuer can buy notes back on the long
+            book and burn them. Face F shrinks and H rises — a cheap note price helps the
+            issuer.
           </p>
         </section>
 
@@ -136,8 +150,27 @@ export default function DocsPage() {
             posted the order.
           </p>
           <p>
-            Filling a <strong>short ask</strong> does not transfer mMonad — it opens a short
-            with USDC escrow. Cover / force-cover on repay returns escrow to the short.
+            <strong>P_mid</strong> is the mMonad price: the average of the last long fill and the
+            last short fill, across all cells. Every trade moves it, and with it every
+            cell&apos;s H. Long orders must be priced at least <strong>0.10 above the last short
+            fill</strong> and short orders at least 0.10 below the last long fill, so the two
+            books always keep a spread. Fills under 1% of the cell&apos;s face do not move P_mid.
+          </p>
+          <p>
+            The <strong>long book</strong> trades real notes of one cell; orders only match
+            within the same cell.
+          </p>
+          <p>
+            The <strong>short book</strong> is a cash-settled bet on the same cell&apos;s note
+            price, quoted as a note price e below 1.00. Every unit locks exactly 1 USDC: the
+            short puts in 1 − e, the writer (the other side) puts in e. At maturity the
+            settlement price v is the cell&apos;s note TWAP, capped at 1.00 (or par if the book
+            is thin: under 3 fills or under 10% of face traded). The short receives 1 − v and the writer v, so the
+            short profits when notes trade below e. Holding both sides of one cell nets out at
+            1 USDC per unit — that is the early exit. Short trades never touch G, F or the
+            notes; they only use the note price. Open short units per cell are capped at half
+            the cell&apos;s face. A TWAP on a thin book can still be pushed by traders willing to
+            sell notes below par; the cap bounds what that can win.
           </p>
         </section>
 
@@ -147,8 +180,9 @@ export default function DocsPage() {
           </h2>
           <p>
             The clock starts at <strong>first sale</strong> (else mint) + 24 hours, plus a
-            minimum block delay. Until then: issuer cannot repay; long cannot withdraw. The
-            Cell page shows a live countdown.
+            minimum block delay. Until then the issuer cannot repay and holders cannot redeem.
+            After it, any holder can redeem notes at par straight from the cell (pro-rata if
+            H &lt; 1), and the short book can be settled. The Cell page shows a live countdown.
           </p>
         </section>
 
@@ -162,14 +196,21 @@ export default function DocsPage() {
             if the cell recovered to Verdant, the bond is slashed to the issuer; if still
             Frostbite, the cell novates to the hunter.
           </p>
+          <p>
+            Novation: the hunter&apos;s bond is added to the cell&apos;s collateral and the hunter
+            takes the issuer seat, including any unsold notes. The previous issuer loses their
+            margin. Note holders are unaffected — the cell is now better collateralised.
+          </p>
         </section>
 
         <section id="repay" className="scroll-mt-24 space-y-3">
           <h2 className="text-lg font-semibold text-zinc-950 dark:text-white">Repay</h2>
           <p>
-            Issuer-only, Verdant (H &gt; 1.10), after maturity. Repay does not walk the book:
-            shorts are force-covered from escrow; longs are paid from the cell up to mark;
-            leftover collateral returns to the issuer.
+            Issuer-only, Verdant (H &gt; 1.10), after maturity. Repay reserves 1 USDC for every
+            outstanding note (or all of G if less), fixes the short-book settlement price,
+            refunds resting orders, and returns the rest of the collateral to the issuer. Every
+            holder then redeems their notes at par from Portfolio — no matter how many holders
+            there are.
           </p>
         </section>
 
@@ -180,13 +221,27 @@ export default function DocsPage() {
           <p>
             Optional vault bound to a <code className="font-mono text-xs">cdpId</code>. First
             12h after the cell opens: buy only VERDANT or only FROSTBITE at $1. Hedge packs
-            (equal V+F, you choose size) stay open until market maturity. Resolution uses
-            on-chain H &gt; 1.10 → VERDANT wins; else FROSTBITE. Loser pot: 10% treasury · 10%
-            issuer · 80% winners. Zero losers → 1:1. No token rental in V1.
+            (equal V+F, you choose size) stay open until market maturity. Loser pot: 10%
+            treasury · 10% issuer · 80% winners. Zero losers → 1:1. No token rental in V1.
+          </p>
+          <h3 className="pt-2 font-medium text-zinc-950 dark:text-white">
+            How a Season is decided
+          </h3>
+          <p>
+            At maturity <strong>VERDANT</strong> wins if the cell&apos;s marked health{" "}
+            <code className="font-mono text-xs">H = G / (F × P_mid)</code> is above 1.10;
+            otherwise <strong>FROSTBITE</strong> wins. The settling P_mid and H are stored
+            on-chain with the result.
+          </p>
+          <p>
+            Because P_mid moves with every long and short fill, the Season is a live fight:
+            long buyers push the mark up and cells toward Frostbite, shorts push it down and
+            cells back to Verdant. The market is open; anyone who thinks the price is wrong can
+            trade against it.
           </p>
           <p className="text-xs text-zinc-500">
-            Season does not replace the CLOB. It is a parallel prediction surface on the same
-            cell health.
+            Season does not replace the CLOB. The same marked health gates hunt, repay, and the
+            Winter levy.
           </p>
         </section>
 
@@ -199,7 +254,8 @@ export default function DocsPage() {
               Portfolio
             </Link>{" "}
             shows your USDC and mMonad mark-to-market, issued debt, cells where you are issuer or
-            long owner (with H @ mark), resting maker orders, short size + escrow, and season
+            note holder (with marked H), notes to redeem, resting maker orders, short-book
+            positions with settle / claim, and season
             positions with cost / mark / PnL (unresolved marked at cost; resolved mark =
             claim preview).
           </p>
@@ -211,12 +267,18 @@ export default function DocsPage() {
           </h2>
           <dl className="space-y-3">
             {[
-              ["mMonad", "The debt note ERC-20. Not the Monad gas token."],
-              ["Cell / CDP", "One issuer position: collateral G, face F, long owner."],
-              ["Verdant", "Healthy season: H > 1.10 (on-chain G/F)."],
-              ["Frostbite", "Stressed season: H ≤ 1.10."],
-              ["P_mid / mark", "Display mid from the live book; mark used for H @ mark."],
-              ["Drawer", "The issuer address — does not change when the note trades."],
+              [
+                "mMonad",
+                "The debt note: an ERC-1155 where token id = cell id, so notes of different cells never mix. Each note is a claim on 1 USDC of that cell at maturity (pro-rata if the cell is underwater). Not the Monad gas token.",
+              ],
+              ["Cell / CDP", "One issuer position: collateral G, face F (= mMonad supply of that id)."],
+              ["Verdant", "Healthy cell: marked H = G/(F·P_mid) > 1.10."],
+              ["Frostbite", "Stressed cell: marked H ≤ 1.10. Hunt opens; repay is blocked."],
+              ["P_mid", "mMonad price: (last long fill + last short fill) / 2, one price for all cells."],
+              ["Note TWAP", "Time-weighted long-note price on a cell; settles the short book."],
+              ["Drawer", "The issuer address. Unchanged by note trades; passes to the hunter on novation."],
+              ["Retire", "Issuer buys notes back and burns them, shrinking F before maturity."],
+              ["Redeem", "Holders burn notes for USDC at par after repay or maturity."],
             ].map(([k, v]) => (
               <div key={k}>
                 <dt className="font-medium text-zinc-950 dark:text-white">{k}</dt>

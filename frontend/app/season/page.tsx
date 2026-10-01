@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
-import { cdpAbi, seasonPoolAbi } from "@/lib/abi";
+import { cdpAbi, creditMarketAbi, seasonPoolAbi } from "@/lib/abi";
 import { SEASON_POOL } from "@/lib/addresses";
 import { ensureAllowance } from "@/lib/ensure-usdc";
 import { etaFromUnix, fromWad, shortAddr, stampFromUnix, toWad } from "@/lib/format";
@@ -13,6 +13,9 @@ import { txError } from "@/lib/tx-error";
 import { useIsClient } from "@/lib/use-is-client";
 import { useProtocol } from "@/lib/use-protocol";
 import { monadTestnet } from "@/lib/wagmi";
+import { noRestore } from "@/lib/no-restore";
+
+const FROSTBITE = 11n * 10n ** 17n;
 
 type Cdp = {
   issuer: Address;
@@ -26,7 +29,7 @@ type Cdp = {
 };
 
 export default function SeasonPage() {
-  const [cdpId, setCdpId] = useState("1");
+  const [cdpId, setCdpId] = useState("");
   const [each, setEach] = useState("10");
   const [dirAmt, setDirAmt] = useState("10");
   const [note, setNote] = useState<string | null>(null);
@@ -59,14 +62,6 @@ export default function SeasonPage() {
     const tick = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
     return () => window.clearInterval(tick);
   }, [ready]);
-
-  const id = useMemo(() => {
-    try {
-      return BigInt(cdpId.trim() || "0");
-    } catch {
-      return 0n;
-    }
-  }, [cdpId]);
 
   const nextCdpId = useReadContract({
     address: protocol.position,
@@ -120,7 +115,7 @@ export default function SeasonPage() {
     },
   });
 
-  const openMarkets = useMemo(() => {
+  const allMarkets = useMemo(() => {
     const rows = allMarketsPack.data;
     // markets + maturityOf per mid
     if (!rows || rows.length !== allMids.length * 2) return [];
@@ -153,11 +148,12 @@ export default function SeasonPage() {
           verdantWins: Boolean(m[9]),
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .sort((a, b) => Number(a!.resolved) - Number(b!.resolved));
   }, [allMids, allMarketsPack.data]);
 
   const myPosPack = useReadContracts({
-    contracts: openMarkets.flatMap((row) => {
+    contracts: allMarkets.flatMap((row) => {
       const mId = row!.marketId;
       return [
         {
@@ -177,7 +173,7 @@ export default function SeasonPage() {
       ];
     }),
     query: {
-      enabled: Boolean(SEASON_POOL && address && openMarkets.length > 0),
+      enabled: Boolean(SEASON_POOL && address && allMarkets.length > 0),
       refetchInterval: 4000,
       staleTime: 0,
       placeholderData: undefined,
@@ -188,18 +184,29 @@ export default function SeasonPage() {
   const myPositions = useMemo(() => {
     if (!address) return [];
     const rows = myPosPack.data;
-    const expected = openMarkets.length * 2;
+    const expected = allMarkets.length * 2;
     if (!rows || rows.length !== expected) return [];
-    return openMarkets
+    return allMarkets
       .map((row, i) => {
         if (!row) return null;
         const v = (rows[i * 2]?.result as bigint | undefined) ?? 0n;
         const f = (rows[i * 2 + 1]?.result as bigint | undefined) ?? 0n;
         if (v === 0n && f === 0n) return null;
+        // Settled: losing side is worthless and claim zeroes the winner's balance.
+        if (row.resolved && (row.verdantWins ? v : f) === 0n) return null;
         return { ...row, v, f };
       })
       .filter(Boolean);
-  }, [openMarkets, myPosPack.data, address]);
+  }, [allMarkets, myPosPack.data, address]);
+
+  // Settled markets stay listed only while this wallet still has a winning claim.
+  const openMarkets = useMemo(
+    () =>
+      allMarkets.filter(
+        (row) => row && (!row.resolved || myPositions.some((p) => p!.marketId === row.marketId)),
+      ),
+    [allMarkets, myPositions],
+  );
 
   const cellsPack = useReadContracts({
     contracts: allCdpIds.map((cid) => ({
@@ -214,6 +221,23 @@ export default function SeasonPage() {
       refetchInterval: 8000,
     },
   });
+
+  const latestActive = useMemo(() => {
+    for (let i = allCdpIds.length - 1; i >= 0; i--) {
+      const cdp = cellsPack.data?.[i]?.result as Cdp | undefined;
+      if (cdp?.active) return allCdpIds[i];
+    }
+    return 0n;
+  }, [allCdpIds, cellsPack.data]);
+
+  const id = useMemo(() => {
+    if (!cdpId.trim()) return latestActive;
+    try {
+      return BigInt(cdpId.trim());
+    } catch {
+      return 0n;
+    }
+  }, [cdpId, latestActive]);
 
   const myCellIds = useMemo(() => {
     if (!me) return [] as bigint[];
@@ -305,6 +329,31 @@ export default function SeasonPage() {
     },
   });
 
+  const pMid = useReadContract({
+    address: protocol.market,
+    abi: creditMarketAbi,
+    functionName: "pMid",
+    chainId: monadTestnet.id,
+    query: { enabled: Boolean(protocol.market), refetchInterval: 5000 },
+  });
+
+  const settledHealth = useReadContract({
+    address: SEASON_POOL,
+    abi: seasonPoolAbi,
+    functionName: "settleHealth",
+    args: [mid],
+    chainId: monadTestnet.id,
+    query: { enabled: Boolean(SEASON_POOL && mid > 0n), refetchInterval: 8000 },
+  });
+  const settledMark = useReadContract({
+    address: SEASON_POOL,
+    abi: seasonPoolAbi,
+    functionName: "settleMark",
+    args: [mid],
+    chainId: monadTestnet.id,
+    query: { enabled: Boolean(SEASON_POOL && mid > 0n), refetchInterval: 8000 },
+  });
+
   const myV = useReadContract({
     address: SEASON_POOL,
     abi: seasonPoolAbi,
@@ -382,8 +431,15 @@ export default function SeasonPage() {
   const pnl = mark - cost;
 
   const hLabel = health.data != null ? fromWad(health.data) : "—";
-  const seasonNow =
-    health.data == null ? "—" : health.data > 1100000000000000000n ? "Verdant" : "Frostbite";
+  const seasonNow = resolved
+    ? verdantWins
+      ? "Verdant"
+      : "Frostbite"
+    : health.data == null
+      ? "—"
+      : health.data > FROSTBITE
+        ? "Verdant"
+        : "Frostbite";
 
   async function run(label: string, fn: () => Promise<void>) {
     if (!isConnected) {
@@ -443,7 +499,7 @@ export default function SeasonPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
           <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-            Open markets · bet on any
+            Season markets · live first, then settled
           </p>
           {openMarkets.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-500">
@@ -471,9 +527,9 @@ export default function SeasonPage() {
                       <span className={`text-[11px] ${selected ? "opacity-80" : "text-zinc-500"}`}>
                         {row.resolved
                           ? row.verdantWins
-                            ? "VERDANT won"
-                            : "FROSTBITE won"
-                          : `V ${fromWad(row.vSupply, 0)} · F ${fromWad(row.fSupply, 0)}`}
+                            ? "cell closed · VERDANT won · claim open"
+                            : "cell closed · FROSTBITE won · claim open"
+                          : `live · V ${fromWad(row.vSupply, 0)} · F ${fromWad(row.fSupply, 0)}`}
                       </span>
                     </button>
                   </li>
@@ -506,7 +562,9 @@ export default function SeasonPage() {
                     >
                       <span className="font-mono">Cell #{row.cdpId.toString()}</span>
                       <span className="font-mono text-[11px] text-zinc-500">
-                        V {fromWad(row.v, 2)} · F {fromWad(row.f, 2)}
+                        {row.resolved
+                          ? "settled · claim ready"
+                          : `V ${fromWad(row.v, 2)} · F ${fromWad(row.f, 2)}`}
                       </span>
                     </button>
                   </li>
@@ -540,6 +598,7 @@ export default function SeasonPage() {
             <span className="text-zinc-500">Cell id (any active cdpId)</span>
             <input
               value={cdpId}
+              placeholder={latestActive > 0n ? latestActive.toString() : "cell id"}
               inputMode="numeric"
               onChange={(e) => setCdpId(e.target.value)}
               className="min-h-11 rounded-xl border border-zinc-200 bg-transparent px-4 py-3 font-mono text-base outline-none dark:border-white/10"
@@ -569,18 +628,34 @@ export default function SeasonPage() {
 
           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
             <div>
-              <dt className="text-zinc-500">H on-chain</dt>
-              <dd className="font-mono">{hLabel}</dd>
+              <dt className="text-zinc-500">Marked health H = G/(F·P)</dt>
+              <dd className="font-mono">
+                {hLabel}
+                <span className="block text-[11px] text-zinc-500">
+                  P<sub>mid</sub> {pMid.data != null ? fromWad(pMid.data, 4) : "—"} · Verdant if H &gt; 1.10
+                </span>
+              </dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Cell health season</dt>
+              <dt className="text-zinc-500">
+                {resolved ? "Settled by" : "Leading side"}
+              </dt>
               <dd className={seasonNow === "Frostbite" ? "text-[#E11D48]" : "text-[#22C55E]"}>
-                {seasonNow}
+                {resolved
+                  ? `${seasonNow} · H ${fromWad(settledHealth.data ?? 0n, 4)}`
+                  : seasonNow}
+                <span className="block text-[11px] text-zinc-500">
+                  {resolved
+                    ? `at P_mid ${fromWad(settledMark.data ?? 0n, 4)}`
+                    : "longs push H down, shorts push it up"}
+                </span>
               </dd>
             </div>
             <div>
               <dt className="text-zinc-500">Season market</dt>
-              <dd className="font-mono">{mid > 0n ? mid.toString() : "not opened"}</dd>
+              <dd className="font-mono">
+                {mid === 0n ? "not opened" : resolved ? `${mid} · settled` : mid.toString()}
+              </dd>
             </div>
             <div>
               <dt className="text-zinc-500">Directional 12h</dt>
@@ -603,6 +678,7 @@ export default function SeasonPage() {
           )}
 
           <button
+            {...noRestore}
             type="button"
             disabled={!ready || busy || !SEASON_POOL || mid > 0n || id === 0n}
             onClick={() =>
@@ -619,7 +695,11 @@ export default function SeasonPage() {
             }
             className="mt-5 min-h-11 w-full rounded-full bg-zinc-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-[#0B0F14]"
           >
-            {mid > 0n ? "Market already open" : "Open season market (legacy)"}
+            {mid === 0n
+              ? "Open season market (legacy)"
+              : resolved
+                ? "Season settled · one market per cell"
+                : "Market already open"}
           </button>
 
           <label className="mt-4 flex flex-col gap-2 text-sm">
@@ -632,6 +712,7 @@ export default function SeasonPage() {
           </label>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <button
+              {...noRestore}
               type="button"
               disabled={!ready || busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
               onClick={() =>
@@ -660,6 +741,7 @@ export default function SeasonPage() {
               Buy VERDANT
             </button>
             <button
+              {...noRestore}
               type="button"
               disabled={!ready || busy || !SEASON_POOL || mid === 0n || !dirOpen.data}
               onClick={() =>
@@ -703,6 +785,7 @@ export default function SeasonPage() {
             />
           </label>
           <button
+            {...noRestore}
             type="button"
             disabled={busy || !SEASON_POOL || !packOpen}
             onClick={() =>
@@ -837,6 +920,7 @@ export default function SeasonPage() {
 
           <div className="mt-5 flex flex-col gap-2">
             <button
+              {...noRestore}
               type="button"
               disabled={busy || !SEASON_POOL || !canResolve}
               onClick={() =>
@@ -860,6 +944,7 @@ export default function SeasonPage() {
                   : `Resolve in ${etaFromUnix(maturity, nowSec)}`}
             </button>
             <button
+              {...noRestore}
               type="button"
               disabled={busy || !SEASON_POOL || !canClaim}
               onClick={() =>

@@ -6,7 +6,7 @@ const cards = [
     href: "/issue",
     kicker: "Issuer",
     title: "Issue",
-    body: "Post USDC, mint mMonad at par, seed both books. First mint 25 bps (0.25%). Roll within 48h: 1 bp (0.01%).",
+    body: "Post USDC, mint mMonad notes at par, listed on the long book. First mint 25 bps (0.25%). Roll within 48h: 1 bp (0.01%).",
   },
   {
     href: "/trade",

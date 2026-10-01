@@ -5,10 +5,12 @@ import { useAccount } from "wagmi";
 import { managerAbi } from "@/lib/abi";
 import { SWAP } from "@/lib/addresses";
 import { ensureAllowance } from "@/lib/ensure-usdc";
-import { toWad } from "@/lib/format";
+import { fromWad, toWad } from "@/lib/format";
+import { useDisplayMid } from "@/lib/use-display-mid";
 import { getTxClients } from "@/lib/tx-clients";
 import { txError } from "@/lib/tx-error";
 import { useProtocol } from "@/lib/use-protocol";
+import { noRestore } from "@/lib/no-restore";
 
 export default function IssuePage() {
   const [g, setG] = useState("111.25");
@@ -18,16 +20,19 @@ export default function IssuePage() {
   const [busy, setBusy] = useState(false);
   const { isConnected } = useAccount();
   const protocol = useProtocol();
+  const mid = useDisplayMid(protocol.market);
+  const p = Number(fromWad(mid.px, 6));
 
   const math = useMemo(() => {
     const G = Number(g);
     const F = Number(f);
-    if (!G || !F || F <= 0) return null;
+    if (!G || !F || F <= 0 || !p) return null;
     const fee = F * (roll ? 0.0001 : 0.0025);
     const net = G - fee;
-    const h = net / F;
-    return { fee, net, h };
-  }, [g, f, roll]);
+    const backing = net / F;
+    const h = net / (F * p);
+    return { fee, net, backing, h };
+  }, [g, f, roll, p]);
 
   async function mint() {
     if (!isConnected) {
@@ -67,7 +72,7 @@ export default function IssuePage() {
         args: [debt, usdcIn],
       });
       const rec = await publicClient.waitForTransactionReceipt({ hash });
-      setNote(`Minted. Seeded long 1.005 and short 0.995. ${rec.transactionHash}`);
+      setNote(`Minted. Notes listed on the long book. ${rec.transactionHash}`);
     } catch (e) {
       setNote(txError(e));
     } finally {
@@ -80,9 +85,11 @@ export default function IssuePage() {
       <div>
         <h1 className="text-2xl font-semibold sm:text-3xl">Issue</h1>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Anyone with USDC can mint. Default is Verdant (H over 1.10). First
-          mint 25 bps (0.25%). Roll within 48h: 1 bp (0.01%). Seed spread 50
-          bps (1.005 / 0.995). This calls createCDP on-chain.
+          Anyone with USDC can mint with collateral of at least 1.10 × face. Health is marked to
+          the mMonad price, H = G / (F × P<sub>mid</sub>), so it moves with every long and short
+          fill. First mint 25 bps (0.25%). Roll within 48h: 1 bp (0.01%). Notes are listed as a
+          long ask at 1.005, or at last short + 0.10 if that is higher. This calls createCDP
+          on-chain.
         </p>
       </div>
       {!SWAP && (
@@ -123,9 +130,15 @@ export default function IssuePage() {
           <dd className="text-right font-mono">{math.fee.toFixed(4)} USDC</dd>
           <dt className="text-zinc-500">Collateral left</dt>
           <dd className="text-right font-mono">{math.net.toFixed(4)}</dd>
-          <dt className="text-zinc-500">HealthRatio</dt>
+          <dt className="text-zinc-500">Backing G/F (mint needs ≥ 1.10)</dt>
+          <dd className={`text-right font-mono ${math.backing < 1.1 ? "text-[#E11D48]" : ""}`}>
+            {math.backing.toFixed(4)}
+          </dd>
+          <dt className="text-zinc-500">
+            Health at P<sub>mid</sub> {p.toFixed(4)}
+          </dt>
           <dd className="text-right font-mono">{math.h.toFixed(4)}</dd>
-          <dt className="text-zinc-500">Season</dt>
+          <dt className="text-zinc-500">Season now</dt>
           <dd className="text-right">
             {math.h <= 1.1 ? (
               <span className="text-[#E11D48]">Frostbite</span>
@@ -139,6 +152,7 @@ export default function IssuePage() {
         <p className="text-xs text-zinc-600 dark:text-zinc-400">{note}</p>
       )}
       <button
+        {...noRestore}
         type="button"
         disabled={!math || busy || !SWAP}
         onClick={() => void mint()}

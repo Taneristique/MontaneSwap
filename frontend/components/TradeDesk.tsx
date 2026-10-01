@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts, useWatchContractEvent } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
@@ -11,13 +11,15 @@ import { fromWad, seasonOf, shortAddr, stampFromUnix, toWad, utcFromUnix } from 
 
 /** Last N maker opens / personal fills shown in tabs. */
 const MY_RECENT = 25;
+const BOOK_DEPTH = 4;
 import { getTxClients } from "@/lib/tx-clients";
 import { txError } from "@/lib/tx-error";
+import { useDisplayMid } from "@/lib/use-display-mid";
 import { useFillTape, type FillTape } from "@/lib/use-fill-tape";
-import { markHealth, useDisplayMid } from "@/lib/use-display-mid";
 import { useNnsNames } from "@/lib/use-nns-name";
 import { useProtocol } from "@/lib/use-protocol";
 import { monadTestnet } from "@/lib/wagmi";
+import { noRestore } from "@/lib/no-restore";
 
 type Book = "long" | "short";
 type SideBtn = "buy" | "sell";
@@ -127,8 +129,9 @@ function BookTable({
   names: Map<string, string>;
   onPickLevel: (level: Level, ask: boolean) => void;
 }) {
-  const askLevels = aggregateLevels(asks, true);
-  const bidLevels = aggregateLevels(bids, false);
+  // Asks are drawn high→low (best at the bottom), bids high→low (best on top).
+  const askLevels = aggregateLevels(asks, true).slice(-BOOK_DEPTH);
+  const bidLevels = aggregateLevels(bids, false).slice(0, BOOK_DEPTH);
   const max = Math.max(
     ...askLevels.map((l) => Number(l.size)),
     ...bidLevels.map((l) => Number(l.size)),
@@ -178,14 +181,14 @@ function BookTable({
       <div className="mb-2 grid grid-cols-4 text-[11px] text-zinc-500 sm:grid-cols-6 sm:text-xs">
         <span>Px</span>
         <span className="text-right">Size</span>
-        <span className="text-right">H@mark</span>
+        <span className="text-right">H</span>
         <span className="hidden text-right sm:block">Depth</span>
         <span className="hidden text-right sm:block">Issuer</span>
         <span className="text-right">Time</span>
       </div>
       {askLevels.map((l) => line(l, true))}
       <div className="my-2 border-y border-zinc-200 py-2 text-center text-[11px] text-zinc-500 dark:border-white/10 sm:text-xs">
-        click level → limit · placeOrder walks book · My open = last {MY_RECENT} maker
+        best {BOOK_DEPTH} levels per side · click level → limit · orders outside the spread rest in My open
       </div>
       {bidLevels.map((l) => line(l, false))}
       {askLevels.length === 0 && bidLevels.length === 0 && (
@@ -212,9 +215,7 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
   const protocol = useProtocol();
   const localTape = useFillTape(fillTape ? undefined : protocol.market);
   const tape = fillTape ?? localTape;
-  const mid = useDisplayMid(protocol.market, tape.lastPrice);
-  const markPx = mid.markPx > 0n ? mid.markPx : 10n ** 18n;
-
+  const mid = useDisplayMid(protocol.market);
   const live = useReadContract({
     address: protocol.market,
     abi: creditMarketAbi,
@@ -291,6 +292,31 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
     },
   });
 
+  const nextCdp = useReadContract({
+    address: protocol.position,
+    abi: cdpAbi,
+    functionName: "nextId",
+    chainId: monadTestnet.id,
+    query: { enabled: Boolean(protocol.position), refetchInterval: 8000 },
+  });
+  const allCellIds = useMemo(
+    () => Array.from({ length: Math.min(Number(nextCdp.data ?? 0n), 64) }, (_, i) => BigInt(i + 1)),
+    [nextCdp.data],
+  );
+  const allCells = useReadContracts({
+    contracts: allCellIds.map((id) => ({
+      address: protocol.position,
+      abi: cdpAbi,
+      functionName: "getCDP" as const,
+      args: [id] as const,
+      chainId: monadTestnet.id,
+    })),
+    query: { enabled: Boolean(protocol.position) && allCellIds.length > 0, refetchInterval: 8000 },
+  });
+  const activeCells = allCellIds.filter(
+    (_, i) => (allCells.data?.[i]?.result as Cdp | undefined)?.active,
+  );
+
   const raw = (live.data ?? []) as Live[];
   const ids = [...new Set(raw.map((o) => o.cdpId).filter((id) => id > 0n))];
   const cells = useReadContracts({
@@ -366,54 +392,66 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
     const cdp = idx >= 0 ? (cells.data?.[idx * 2]?.result as Cdp | undefined) : undefined;
     const hWad = idx >= 0 ? (cells.data?.[idx * 2 + 1]?.result as bigint | undefined) : undefined;
     const issuer = cdp?.issuer ?? o.maker;
-    const hMark =
-      cdp && cdp.debtAmount > 0n
-        ? markHealth(cdp.collateralAmount, cdp.debtAmount, markPx)
-        : (hWad ?? 0n);
-    // Book column is H@mark — color matches the number (not Season/hunt gate).
+    const hOn = hWad ?? 0n;
     return {
       ...o,
       issuer,
       f: cdp ? fromWad(cdp.debtAmount, 0) : "—",
       g: cdp ? fromWad(cdp.collateralAmount, 2) : "—",
-      h: hMark > 0n ? fromWad(hMark, 2) : "—",
-      season: hMark > 0n ? seasonOf(hMark) : "Verdant",
+      h: hOn > 0n ? fromWad(hOn, 2) : "—",
+      season: hOn > 0n ? seasonOf(hOn) : "Verdant",
     };
   });
 
   const names = useNnsNames(rows.map((r) => r.issuer));
 
   const shown = useMemo(() => {
+    const inCell = rows.filter((o) => pickedCdp == null || o.cdpId === pickedCdp || o.cdpId === 0n);
     if (book === "long") {
       return {
-        asks: rows.filter((o) => o.side === Side.LongAsk),
-        bids: rows.filter((o) => o.side === Side.LongBid),
+        asks: inCell.filter((o) => o.side === Side.LongAsk),
+        bids: inCell.filter((o) => o.side === Side.LongBid),
       };
     }
     return {
-      asks: rows.filter((o) => o.side === Side.ShortAsk),
-      bids: rows.filter((o) => o.side === Side.ShortBid),
+      asks: inCell.filter((o) => o.side === Side.ShortAsk),
+      bids: inCell.filter((o) => o.side === Side.ShortBid),
     };
-  }, [book, rows]);
+  }, [book, rows, pickedCdp]);
+
+  const inSpread = useCallback(
+    (px: bigint) =>
+      book === "long"
+        ? mid.longFloor === 0n || px >= mid.longFloor
+        : mid.shortCap === 0n || px <= mid.shortCap,
+    [book, mid.longFloor, mid.shortCap],
+  );
 
   const best = useMemo(() => {
     if (side === "buy") {
-      return [...shown.asks].sort((a, b) => {
+      return [...shown.asks].filter((o) => inSpread(o.price)).sort((a, b) => {
         if (a.price !== b.price) return a.price < b.price ? -1 : 1;
         return a.id < b.id ? -1 : 1;
       })[0];
     }
-    return [...shown.bids].sort((a, b) => {
+    return [...shown.bids].filter((o) => inSpread(o.price)).sort((a, b) => {
       if (a.price !== b.price) return a.price > b.price ? -1 : 1;
       return a.id < b.id ? -1 : 1;
     })[0];
-  }, [side, shown.asks, shown.bids]);
+  }, [side, shown.asks, shown.bids, inSpread]);
+
+  const autoCell =
+    (best && best.cdpId > 0n ? best.cdpId : undefined) ?? activeCells[activeCells.length - 1];
+
+  const spreadDefault =
+    book === "long"
+      ? mid.longFloor > 0n ? fromWad(mid.longFloor) : "1.005"
+      : mid.shortCap > 0n ? fromWad(mid.shortCap) : "0.905";
 
   useEffect(() => {
     if (priceLocked) return;
-    if (best) setPrice(fromWad(best.price));
-    else setPrice(book === "long" ? (side === "buy" ? "1.005" : "1.005") : "0.995");
-  }, [best, book, side, priceLocked]);
+    setPrice(best ? fromWad(best.price) : spreadDefault);
+  }, [best, spreadDefault, priceLocked]);
 
   const depthAsk = shown.asks.reduce((s, o) => s + o.remaining, 0n);
   const depthBid = shown.bids.reduce((s, o) => s + o.remaining, 0n);
@@ -433,17 +471,6 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
 
   /** Market: every live order + recent fills. */
   const marketRows = useMemo(() => {
-    const open = rows.map((o) => ({
-      key: `open-${o.id}`,
-      px: fromWad(o.price),
-      size: fromWad(o.remaining, 2),
-      usdc: "—",
-      who: shortAddr(o.maker),
-      detail: sideLabel(o.side),
-      status: "open" as const,
-      time: stampFromUnix(o.landedAt),
-      sort: o.landedAt,
-    }));
     const filled = tape.fills.slice(0, 40).map((f) => {
       const meta = orderById.get(f.orderId.toString());
       return {
@@ -458,8 +485,8 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
         sort: f.timestampSec > 0n ? f.timestampSec : f.blockNumber,
       };
     });
-    return [...open, ...filled].sort((a, b) => Number(b.sort - a.sort));
-  }, [rows, tape.fills, orderById]);
+    return filled.sort((a, b) => Number(b.sort - a.sort));
+  }, [tape.fills, orderById]);
 
   /** My fills: I was taker, or my resting order was filled (maker). Newest first, last N. */
   const myFills = useMemo(() => {
@@ -484,10 +511,10 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
     side === "buy"
       ? book === "long"
         ? "Buy long · lift ask"
-        : "Buy short · lift ask"
+        : "Write · take the long side (lock e)"
       : book === "long"
         ? "Sell long · hit bid / post ask"
-        : "Sell short · hit bid / post ask";
+        : "Go short · lock 1 − e";
 
   const enumSide =
     book === "long"
@@ -579,34 +606,42 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
       setNote("Size and price must be positive.");
       return;
     }
-    const cdpId = pickedCdp ?? best?.cdpId ?? 0n;
+    const cdpId = pickedCdp ?? autoCell ?? 0n;
     const takeId = pickedOrderId;
+    if (takeId == null && cdpId === 0n) {
+      setNote("No active cell to trade. Issue one first.");
+      return;
+    }
     setBusy(true);
     setNote(null);
     try {
       const { publicClient, wallet, address: from } = await getTxClients();
       const issuance = cost.data && cost.data > 0n ? cost.data : 10n ** 18n;
       const usdcNeed = (amt * px) / issuance;
+      const WAD = 10n ** 18n;
+      // Short book locks 1 USDC per unit: writer e, short 1 − e (+ taker fee headroom).
+      const writerNeed = (amt * px) / WAD;
+      const shortNeed = amt - writerNeed;
+      const withFee = (v: bigint) => v + v / 1000n + 1n;
 
       if (takeId != null) {
         const resting = raw.find((o) => o.id === takeId)?.side ?? enumSide;
-        if (resting === Side.LongAsk || resting === Side.ShortAsk) {
+        const need =
+          resting === Side.LongAsk
+            ? usdcNeed
+            : resting === Side.ShortAsk
+              ? withFee(writerNeed)
+              : resting === Side.ShortBid
+                ? withFee(shortNeed)
+                : 0n;
+        if (need > 0n) {
           await ensureAllowance({
             publicClient,
             wallet,
             token: protocol.usdc!,
             owner: from,
             spender: protocol.market!,
-            need: usdcNeed,
-          });
-        } else if (resting === Side.LongBid) {
-          await ensureAllowance({
-            publicClient,
-            wallet,
-            token: protocol.token!,
-            owner: from,
-            spender: protocol.market!,
-            need: amt,
+            need,
           });
         }
         const hash = await wallet.writeContract({
@@ -620,23 +655,24 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
           `Filled #${takeId}. ${rec.status === "success" ? rec.transactionHash : "reverted"}.`,
         );
       } else {
-        if (side === "buy") {
+        if (book === "short" && px >= WAD) {
+          setNote("Short-book price must be below 1.00.");
+          return;
+        }
+        const need =
+          book === "long"
+            ? side === "buy"
+              ? usdcNeed
+              : 0n
+            : withFee(side === "buy" ? writerNeed : shortNeed);
+        if (need > 0n) {
           await ensureAllowance({
             publicClient,
             wallet,
             token: protocol.usdc!,
             owner: from,
             spender: protocol.market!,
-            need: usdcNeed,
-          });
-        } else if (book === "long") {
-          await ensureAllowance({
-            publicClient,
-            wallet,
-            token: protocol.token!,
-            owner: from,
-            spender: protocol.market!,
-            need: amt,
+            need,
           });
         }
         const hash = await wallet.writeContract({
@@ -715,7 +751,19 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
             <span className="font-mono">placeOrder</span> (match then rest leftover). Long
             and short never cross.
           </p>
-          <BookTable asks={shown.asks} bids={shown.bids} names={names} onPickLevel={pickLevel} />
+          {book === "short" && (
+            <p className="mb-3 -mt-1 text-xs text-zinc-500 sm:mb-4">
+              Short book = cash-settled bet on this cell&apos;s note price. Each unit locks 1 USDC:
+              the short puts in 1 − e, the writer e. At maturity v = note TWAP (par if thin): short
+              gets 1 − v, writer gets v. The cell itself is never touched.
+            </p>
+          )}
+          <BookTable
+            asks={shown.asks.filter((o) => inSpread(o.price))}
+            bids={shown.bids.filter((o) => inSpread(o.price))}
+            names={names}
+            onPickLevel={pickLevel}
+          />
         </div>
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5 dark:border-white/10 dark:bg-white/[0.03]">
@@ -738,11 +786,38 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
                     : "text-zinc-500 hover:bg-zinc-950/5 dark:hover:bg-white/10"
                 }`}
               >
-                {s === "buy" ? `Buy ${book}` : `Sell ${book}`}
+                {book === "short"
+                  ? s === "buy"
+                    ? "Write (long side)"
+                    : "Go short"
+                  : s === "buy"
+                    ? "Buy long"
+                    : "Sell long"}
               </button>
             ))}
           </div>
           <label className="mt-5 flex flex-col gap-2 text-sm">
+            <span className="text-zinc-500">Cell</span>
+            <select
+              {...noRestore}
+              value={pickedCdp?.toString() ?? ""}
+              onChange={(e) => {
+                setPickedCdp(e.target.value ? BigInt(e.target.value) : null);
+                setPickedOrderId(null);
+                setLevelHeadId(null);
+                setPriceLocked(false);
+              }}
+              className="min-h-11 rounded-xl border border-zinc-200 bg-transparent px-4 py-3 text-base font-mono outline-none focus:border-zinc-400 dark:border-white/10"
+            >
+              <option value="">{autoCell ? `Auto · cell #${autoCell}` : "Auto · no active cell"}</option>
+              {activeCells.map((id) => (
+                <option key={id.toString()} value={id.toString()}>
+                  Cell #{id.toString()}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-4 flex flex-col gap-2 text-sm">
             <span className="text-zinc-500">Size (mMonad)</span>
             <input
               value={size}
@@ -778,6 +853,11 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
               }}
               className="min-h-11 rounded-xl border border-zinc-200 bg-transparent px-4 py-3 text-base font-mono outline-none focus:border-zinc-400 dark:border-white/10"
             />
+            <span className="text-[11px] text-zinc-500">
+              {book === "long"
+                ? `Long orders ≥ ${mid.longFloor > 0n ? fromWad(mid.longFloor) : "—"} (last short + 0.10)`
+                : `Short orders ≤ ${mid.shortCap > 0n ? fromWad(mid.shortCap) : "—"} (last long − 0.10)`}
+            </span>
           </label>
           <p className="mt-3 text-xs text-zinc-500">
             Taker 5 bps. {label}
@@ -816,6 +896,7 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
             <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">{note}</p>
           )}
           <button
+            {...noRestore}
             type="button"
             disabled={busy || !SWAP}
             onClick={() => void submit()}
@@ -868,7 +949,7 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
 
         {tab === "market" && (
           <TapeTable
-            empty="No open orders or recent fills."
+            empty="No fills yet."
             rows={marketRows.map(({ sort: _s, ...r }) => r)}
           />
         )}
@@ -896,6 +977,7 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
                 </span>
                 <span className="hidden text-right text-[#F59E0B] sm:block">pending</span>
                 <button
+                  {...noRestore}
                   type="button"
                   disabled={busy}
                   onClick={() => void cancel(o.id)}

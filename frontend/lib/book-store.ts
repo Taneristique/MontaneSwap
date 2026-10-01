@@ -234,7 +234,7 @@ export function mint(input: {
   return {
     cell,
     feeUsdc: Number(fee.toFixed(4)),
-    note: "Seeded long 1.005 and short 0.995. Same-book only.",
+    note: "Seeded long ask 1.005. Short book starts empty.",
     snapshot: snapshot(),
   };
 }

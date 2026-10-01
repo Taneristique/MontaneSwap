@@ -5,6 +5,7 @@ import {
   switchChain,
 } from "wagmi/actions";
 import { monadTestnet, wagmiConfig } from "./wagmi";
+import { protocolErrors } from "./protocol-errors";
 
 /** Resolve viem clients at click-time. Hooks often stay undefined when the
  *  connector chain ≠ configured chain (RainbowKit connected, wallet client null). */
@@ -43,5 +44,23 @@ export async function getTxClients() {
     );
   }
 
-  return { publicClient, wallet, address };
+  // Simulate first: a revert surfaces here with its reason instead of burning the gas limit on-chain
+  // (MetaMask falls back to a fixed limit when estimation fails, and Monad charges the full limit).
+  const writeContract = (async (args: Parameters<typeof wallet.writeContract>[0]) => {
+    const call = {
+      ...args,
+      abi: [...(args.abi as readonly unknown[]), ...protocolErrors],
+      account: address,
+    } as Parameters<typeof publicClient.simulateContract>[0];
+    const { request } = await publicClient.simulateContract(call);
+    const gas = await publicClient.estimateContractGas(
+      call as unknown as Parameters<typeof publicClient.estimateContractGas>[0],
+    );
+    return wallet.writeContract({
+      ...(request as Parameters<typeof wallet.writeContract>[0]),
+      gas: (gas * 12n) / 10n,
+    });
+  }) as typeof wallet.writeContract;
+
+  return { publicClient, wallet: { ...wallet, writeContract }, address };
 }

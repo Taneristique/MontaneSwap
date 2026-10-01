@@ -28,23 +28,26 @@ export default function TradePage() {
         <div>
           <h1 className="text-2xl font-semibold sm:text-3xl">Trade</h1>
           <p className="mt-2 max-w-lg text-sm text-zinc-600 dark:text-zinc-400">
-            Books are long and short. HealthRatio is mark-to-market:
-            G / (F × last trade or long ask). Pull-to-refresh or tap Refresh on phone.
+            P<sub>mid</sub> is the mMonad price: the average of the last long fill and the last
+            short fill. Every cell is marked against it, H = G / (F × P<sub>mid</sub>). Long buys
+            push H down toward Frostbite, and shorts push it back up. Long orders stay at least
+            0.10 above the last short.
           </p>
         </div>
         <div className="flex w-fit flex-col gap-1 rounded-2xl border border-zinc-200 px-4 py-2 font-mono text-sm dark:border-white/10">
           <div>
             P<sub>mid</sub> {SWAP ? mid.label : "—"}
-            <span className="ml-2 text-[11px] text-zinc-500">{mid.source}</span>
             <span className="ml-3 text-zinc-500">
               {frozen.data ? "frozen" : "open"}
             </span>
           </div>
           <div className="text-[11px] text-zinc-500">
-            mark {mid.markLabel} ({mid.markSource})
-            {mid.bestLongAsk > 0n && <> · ask {fromWad(mid.bestLongAsk)}</>}
-            {mid.bestLongBid > 0n && <> · bid {fromWad(mid.bestLongBid)}</>}
-            {mid.lastLabel && <> · last {mid.lastLabel}</>}
+            last long {mid.lastLong > 0n ? fromWad(mid.lastLong) : "—"} · last short{" "}
+            {mid.lastShort > 0n ? fromWad(mid.lastShort) : "—"}
+          </div>
+          <div className="text-[11px] text-zinc-500">
+            long ≥ {mid.longFloor > 0n ? fromWad(mid.longFloor) : "—"} · short ≤{" "}
+            {mid.shortCap > 0n ? fromWad(mid.shortCap) : "—"}
           </div>
         </div>
       </div>

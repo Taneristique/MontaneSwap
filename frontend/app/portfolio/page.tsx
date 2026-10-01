@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { erc20Abi, type Address } from "viem";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
@@ -8,10 +8,14 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { cdpAbi, creditMarketAbi, seasonPoolAbi, Side, tokenAbi } from "@/lib/abi";
 import { SEASON_POOL, SWAP } from "@/lib/addresses";
 import { fromWad, pnlLabel, seasonOf, stampFromUnix } from "@/lib/format";
-import { markHealth, useDisplayMid } from "@/lib/use-display-mid";
+import { getTxClients } from "@/lib/tx-clients";
+import { txError } from "@/lib/tx-error";
+import { useDisplayMid } from "@/lib/use-display-mid";
 import { useFillTape } from "@/lib/use-fill-tape";
+import { useNowSec } from "@/lib/use-now-sec";
 import { useProtocol } from "@/lib/use-protocol";
 import { monadTestnet } from "@/lib/wagmi";
+import { noRestore } from "@/lib/no-restore";
 
 type Cdp = {
   issuer: Address;
@@ -91,22 +95,8 @@ export default function PortfolioPage() {
     chainId: monadTestnet.id,
     query: { enabled: Boolean(protocol.usdc && address), refetchInterval: 5000 },
   });
-  const mBal = useReadContract({
-    address: protocol.token,
-    abi: erc20Abi,
-    functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    chainId: monadTestnet.id,
-    query: { enabled: Boolean(protocol.token && address), refetchInterval: 5000 },
-  });
-  const issued = useReadContract({
-    address: protocol.token,
-    abi: tokenAbi,
-    functionName: "issuedDebt",
-    args: address ? [address] : undefined,
-    chainId: monadTestnet.id,
-    query: { enabled: Boolean(protocol.token && address), refetchInterval: 5000 },
-  });
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const nextId = useReadContract({
     address: protocol.position,
@@ -141,6 +131,43 @@ export default function PortfolioPage() {
     },
   });
 
+  const notesPack = useReadContracts({
+    contracts: ids.flatMap((id) => [
+      {
+        address: protocol.token!,
+        abi: tokenAbi,
+        functionName: "balanceOf" as const,
+        args: [address!, id] as const,
+        chainId: monadTestnet.id,
+      },
+      {
+        address: protocol.token!,
+        abi: tokenAbi,
+        functionName: "redeemOpen" as const,
+        args: [id] as const,
+        chainId: monadTestnet.id,
+      },
+      {
+        address: protocol.token!,
+        abi: tokenAbi,
+        functionName: "redeemPool" as const,
+        args: [id] as const,
+        chainId: monadTestnet.id,
+      },
+      {
+        address: protocol.token!,
+        abi: tokenAbi,
+        functionName: "totalSupply" as const,
+        args: [id] as const,
+        chainId: monadTestnet.id,
+      },
+    ]),
+    query: {
+      enabled: Boolean(protocol.token && address) && ids.length > 0,
+      refetchInterval: 5000,
+    },
+  });
+
   const live = useReadContract({
     address: protocol.market,
     abi: creditMarketAbi,
@@ -150,22 +177,13 @@ export default function PortfolioPage() {
   });
 
   const shortPack = useReadContracts({
-    contracts: ids.flatMap((id) => [
-      {
-        address: protocol.market!,
-        abi: creditMarketAbi,
-        functionName: "shortSize" as const,
-        args: [address!, id] as const,
-        chainId: monadTestnet.id,
-      },
-      {
-        address: protocol.market!,
-        abi: creditMarketAbi,
-        functionName: "shortEscrow" as const,
-        args: [address!, id] as const,
-        chainId: monadTestnet.id,
-      },
-    ]),
+    contracts: ids.map((id) => ({
+      address: protocol.market!,
+      abi: creditMarketAbi,
+      functionName: "shortClaim" as const,
+      args: [id, address!] as const,
+      chainId: monadTestnet.id,
+    })),
     query: {
       enabled: Boolean(protocol.market && address) && ids.length > 0,
       refetchInterval: 5000,
@@ -249,6 +267,22 @@ export default function PortfolioPage() {
     },
   });
 
+  const myNotes = useMemo(() => {
+    if (!me) return [];
+    return ids
+      .map((id, i) => {
+        const held = notesPack.data?.[i * 4]?.result as bigint | undefined;
+        if (!held || held === 0n) return null;
+        const open = Boolean(notesPack.data?.[i * 4 + 1]?.result);
+        const pool = (notesPack.data?.[i * 4 + 2]?.result as bigint | undefined) ?? 0n;
+        const supply = (notesPack.data?.[i * 4 + 3]?.result as bigint | undefined) ?? 0n;
+        const cdp = cellsPack.data?.[i * 2]?.result as Cdp | undefined;
+        const claim = open && supply > 0n ? (pool * held) / supply : 0n;
+        return { id, held, open, claim, active: Boolean(cdp?.active) };
+      })
+      .filter((n): n is NonNullable<typeof n> => n !== null);
+  }, [ids, notesPack.data, cellsPack.data, me]);
+
   const myCells = useMemo(() => {
     if (!me) return [];
     return ids
@@ -257,18 +291,14 @@ export default function PortfolioPage() {
         const hOn = cellsPack.data?.[i * 2 + 1]?.result as bigint | undefined;
         if (!cdp?.active) return null;
         const isIssuer = cdp.issuer.toLowerCase() === me;
-        const isLong = cdp.longOwner.toLowerCase() === me;
-        if (!isIssuer && !isLong) return null;
-        const hMark =
-          cdp.debtAmount > 0n
-            ? markHealth(cdp.collateralAmount, cdp.debtAmount, mid.markPx > 0n ? mid.markPx : 10n ** 18n)
-            : (hOn ?? 0n);
-        // Badge / Season / hunt gate = on-chain G/F — not H @ mark.
-        const season = seasonOf(hOn != null && hOn > 0n ? hOn : hMark);
-        return { id, cdp, hOn, hMark, season, isIssuer, isLong };
+        const held = (notesPack.data?.[i * 4]?.result as bigint | undefined) ?? 0n;
+        const isHolder = held > 0n;
+        if (!isIssuer && !isHolder) return null;
+        const season = seasonOf(hOn != null && hOn > 0n ? hOn : 0n);
+        return { id, cdp, hOn, season, isIssuer, isHolder, held };
       })
       .filter(Boolean);
-  }, [ids, cellsPack.data, me, mid.markPx]);
+  }, [ids, cellsPack.data, notesPack.data, me]);
 
   const myOrders = useMemo(() => {
     if (!me) return [];
@@ -276,17 +306,53 @@ export default function PortfolioPage() {
     return rows.filter((o) => o.maker.toLowerCase() === me && o.remaining > 0n);
   }, [live.data, me]);
 
+  const nowSec = useNowSec();
   const myShorts = useMemo(() => {
     if (!me) return [];
     return ids
       .map((id, i) => {
-        const size = shortPack.data?.[i * 2]?.result as bigint | undefined;
-        const escrow = shortPack.data?.[i * 2 + 1]?.result as bigint | undefined;
-        if (!size || size === 0n) return null;
-        return { id, size, escrow: escrow ?? 0n };
+        const row = shortPack.data?.[i]?.result as
+          | readonly [bigint, bigint, boolean, bigint, bigint]
+          | undefined;
+        if (!row) return null;
+        const [short, written, settled, mark, payout] = row;
+        if (short === 0n && written === 0n) return null;
+        const cdp = cellsPack.data?.[i * 2]?.result as Cdp | undefined;
+        const start = cdp ? (cdp.firstSaleAt > 0n ? cdp.firstSaleAt : cdp.openedAt) : 0n;
+        const matureAt = start + 86400n;
+        return { id, short, written, settled, mark, payout, matureAt };
       })
-      .filter(Boolean);
-  }, [ids, shortPack.data, me]);
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+  }, [ids, shortPack.data, cellsPack.data, me]);
+
+  async function shortTx(key: string, fn: "settleShorts" | "claimShort", cdpId: bigint) {
+    setBusy(key);
+    setNote(null);
+    try {
+      const { publicClient, wallet, address: from } = await getTxClients();
+      const hash =
+        fn === "settleShorts"
+          ? await wallet.writeContract({
+              address: protocol.market!,
+              abi: creditMarketAbi,
+              functionName: "settleShorts",
+              args: [cdpId],
+            })
+          : await wallet.writeContract({
+              address: protocol.market!,
+              abi: creditMarketAbi,
+              functionName: "claimShort",
+              args: [cdpId, from],
+            });
+      const rec = await publicClient.waitForTransactionReceipt({ hash });
+      setNote(rec.status === "success" ? `${fn === "settleShorts" ? "Settled" : "Claimed"} cell #${cdpId}.` : "Reverted.");
+      await shortPack.refetch();
+    } catch (e) {
+      setNote(txError(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const mySeason = useMemo(() => {
     const rows = seasonBal.data;
@@ -345,15 +411,39 @@ export default function PortfolioPage() {
     () => mySeason.reduce((s, r) => s + (r?.cost ?? 0n), 0n),
     [mySeason],
   );
-  const noteMtm = useMemo(() => {
-    const bal = mBal.data ?? 0n;
-    const px = mid.markPx > 0n ? mid.markPx : 10n ** 18n;
-    return (bal * px) / 10n ** 18n;
-  }, [mBal.data, mid.markPx]);
-  const shortEscrowTotal = useMemo(
-    () => myShorts.reduce((s, r) => s + (r?.escrow ?? 0n), 0n),
-    [myShorts],
+  const noteBal = useMemo(
+    () => myNotes.filter((n) => n.active).reduce((s, n) => s + n.held, 0n),
+    [myNotes],
   );
+  const noteMtm = useMemo(() => {
+    const px = mid.markPx > 0n ? mid.markPx : 10n ** 18n;
+    return (noteBal * px) / 10n ** 18n;
+  }, [noteBal, mid.markPx]);
+  const issuedFace = useMemo(
+    () => myCells.reduce((s, c) => s + (c && c.isIssuer ? c.cdp.debtAmount : 0n), 0n),
+    [myCells],
+  );
+
+  async function redeem(cdpId: bigint) {
+    setBusy(`redeem-${cdpId}`);
+    setNote(null);
+    try {
+      const { publicClient, wallet } = await getTxClients();
+      const hash = await wallet.writeContract({
+        address: protocol.token!,
+        abi: tokenAbi,
+        functionName: "redeem",
+        args: [cdpId],
+      });
+      const rec = await publicClient.waitForTransactionReceipt({ hash });
+      setNote(rec.status === "success" ? `Redeemed cell #${cdpId} notes.` : "Redeem reverted.");
+      await notesPack.refetch();
+    } catch (e) {
+      setNote(txError(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const frostCount = myCells.filter((c) => c && c.season === "Frostbite").length;
   const verdantCount = myCells.filter((c) => c && c.season === "Verdant").length;
@@ -369,7 +459,7 @@ export default function PortfolioPage() {
       <div className="mx-auto flex max-w-lg flex-col items-start gap-4 py-10">
         <h1 className="text-2xl font-semibold sm:text-3xl">Portfolio</h1>
         <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Connect a wallet to see issued debt, long ownership, open orders, shorts, and
+          Connect a wallet to see issued debt, notes held, open orders, shorts, and
           season packs — live from Monad testnet.
         </p>
         <button
@@ -393,11 +483,12 @@ export default function PortfolioPage() {
           <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Portfolio</h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             Issued cells, note inventory, maker orders, shorts, and season bets with
-            cost / mark / PnL. Mark uses live book / last trade.
+            cost / mark / PnL. Notes are marked at P<sub>mid</sub> (last long + last short) / 2.
           </p>
         </div>
         <p className="font-mono text-[11px] text-zinc-500">
-          P<sub>mid</sub> {mid.label} · mark {mid.markLabel} ({mid.markSource})
+          P<sub>mid</sub> {mid.label} · last long {mid.lastLong > 0n ? fromWad(mid.lastLong) : "—"}
+          {" "}· last short {mid.lastShort > 0n ? fromWad(mid.lastShort) : "—"}
         </p>
       </div>
 
@@ -406,11 +497,11 @@ export default function PortfolioPage() {
         <Stat
           label="mMonad MTM"
           value={fromWad(noteMtm, 2)}
-          hint={`${fromWad(mBal.data ?? 0n, 2)} note @ mark`}
+          hint={`${fromWad(noteBal, 2)} note @ mark`}
         />
         <Stat
           label="Issued debt"
-          value={fromWad(issued.data ?? 0n, 2)}
+          value={fromWad(issuedFace, 2)}
           hint="your drawer face"
         />
         <Stat
@@ -435,12 +526,6 @@ export default function PortfolioPage() {
           }
         />
       </div>
-      {shortEscrowTotal > 0n && (
-        <p className="text-xs text-zinc-500">
-          Short escrow locked: {fromWad(shortEscrowTotal, 2)} USDC across {myShorts.length}{" "}
-          cell(s).
-        </p>
-      )}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
@@ -451,7 +536,7 @@ export default function PortfolioPage() {
         </div>
         {myCells.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-zinc-200 px-4 py-8 text-center text-sm text-zinc-500 dark:border-white/10">
-            No active cells as issuer or long owner.{" "}
+            No active cells as issuer or note holder.{" "}
             <Link href="/issue" className="underline-offset-2 hover:underline">
               Issue
             </Link>
@@ -469,25 +554,15 @@ export default function PortfolioPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-sm font-medium">#{c.id.toString()}</span>
                     <Pill tone={frost ? "red" : "green"}>{c.season}</Pill>
-                    <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                      on-chain gate
-                    </span>
                     {c.isIssuer && <Pill>Issuer</Pill>}
-                    {c.isLong && <Pill tone="amber">Long owner</Pill>}
+                    {c.isHolder && <Pill tone="amber">Holder · {fromWad(c.held, 2)} mM</Pill>}
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs sm:text-sm">
                     <dt className="text-zinc-500">Collateral</dt>
                     <dd className="text-right font-mono">{fromWad(c.cdp.collateralAmount, 2)} USDC</dd>
                     <dt className="text-zinc-500">Face</dt>
                     <dd className="text-right font-mono">{fromWad(c.cdp.debtAmount, 2)} mM</dd>
-                    <dt className="text-zinc-500">H @ mark</dt>
-                    <dd className="text-right font-mono">
-                      {fromWad(c.hMark, 2)}{" "}
-                      <span className="text-zinc-500">
-                        ({seasonOf(c.hMark > 0n ? c.hMark : 0n)})
-                      </span>
-                    </dd>
-                    <dt className="text-zinc-500">H on-chain</dt>
+                    <dt className="text-zinc-500">Health H = G/(F·P)</dt>
                     <dd className="text-right font-mono">
                       {c.hOn != null ? fromWad(c.hOn, 2) : "—"}{" "}
                       <span className={frost ? "text-[#E11D48]" : "text-[#22C55E]"}>
@@ -504,6 +579,58 @@ export default function PortfolioPage() {
                 </article>
               );
             })}
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-base font-semibold">Notes</h2>
+        {note && <p className="text-xs text-zinc-600 dark:text-zinc-400">{note}</p>}
+        {myNotes.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-zinc-200 px-4 py-6 text-center text-sm text-zinc-500 dark:border-white/10">
+            No mMonad notes held. Buy a long on{" "}
+            <Link href="/trade" className="underline-offset-2 hover:underline">
+              Trade
+            </Link>
+            .
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {myNotes.map((n) => (
+              <article
+                key={n.id.toString()}
+                className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white p-4 text-xs dark:border-white/10 dark:bg-white/[0.03] sm:text-sm"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono font-medium">Cell #{n.id.toString()}</span>
+                  <Pill tone={n.open ? "green" : n.active ? "neutral" : "amber"}>
+                    {n.open ? "Repaid · redeemable" : n.active ? "Live" : "Closed"}
+                  </Pill>
+                </div>
+                <p className="font-mono">
+                  {fromWad(n.held, 2)} mM
+                  {n.open ? ` → ${fromWad(n.claim, 2)} USDC` : ""}
+                </p>
+                {n.open ? (
+                  <button
+                    {...noRestore}
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void redeem(n.id)}
+                    className="min-h-10 rounded-full bg-[#22C55E]/15 text-sm font-medium text-[#15803d] disabled:opacity-40 dark:text-[#22C55E]"
+                  >
+                    {busy === `redeem-${n.id}` ? "Sending…" : "Redeem at par"}
+                  </button>
+                ) : n.active ? (
+                  <Link
+                    href="/cell"
+                    className="text-xs text-zinc-500 underline-offset-2 hover:underline"
+                  >
+                    Redeem after maturity on Cell →
+                  </Link>
+                ) : null}
+              </article>
+            ))}
           </div>
         )}
       </section>
@@ -548,30 +675,62 @@ export default function PortfolioPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Shorts</h2>
+        <h2 className="text-base font-semibold">Short book</h2>
+        <p className="text-xs text-zinc-500">
+          Cash-settled on the cell&apos;s note TWAP at maturity (par if the book is thin). Short
+          receives 1 − v per unit, writer receives v.
+        </p>
         {myShorts.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-zinc-200 px-4 py-6 text-center text-sm text-zinc-500 dark:border-white/10">
-            No open short size. Filling a short ask opens synthetic exposure (escrowed USDC).
+            No short-book positions. Sell on the short book to go short, buy to write.
           </p>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2">
             {myShorts.map((s) => {
-              if (!s) return null;
+              const mature = nowSec >= s.matureAt;
               return (
                 <article
                   key={s.id.toString()}
-                  className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]"
+                  className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-sm">Cell #{s.id.toString()}</span>
-                    <Pill tone="red">Short</Pill>
+                    {s.short > 0n && <Pill tone="red">Short {fromWad(s.short, 2)}</Pill>}
+                    {s.written > 0n && <Pill tone="green">Writer {fromWad(s.written, 2)}</Pill>}
                   </div>
-                  <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <dt className="text-zinc-500">Size</dt>
-                    <dd className="text-right font-mono">{fromWad(s.size, 2)} mM</dd>
-                    <dt className="text-zinc-500">Escrow</dt>
-                    <dd className="text-right font-mono">{fromWad(s.escrow, 2)} USDC</dd>
+                  <dl className="grid grid-cols-2 gap-2 text-sm">
+                    <dt className="text-zinc-500">Settlement price</dt>
+                    <dd className="text-right font-mono">
+                      {s.settled ? fromWad(s.mark, 4) : mature ? "ready to settle" : `at ${stampFromUnix(s.matureAt)}`}
+                    </dd>
+                    {s.settled && (
+                      <>
+                        <dt className="text-zinc-500">Payout</dt>
+                        <dd className="text-right font-mono">{fromWad(s.payout, 2)} USDC</dd>
+                      </>
+                    )}
                   </dl>
+                  {s.settled ? (
+                    <button
+                      {...noRestore}
+                      type="button"
+                      disabled={Boolean(busy)}
+                      onClick={() => void shortTx(`claim-${s.id}`, "claimShort", s.id)}
+                      className="min-h-10 rounded-full bg-[#22C55E]/15 text-sm font-medium text-[#15803d] disabled:opacity-40 dark:text-[#22C55E]"
+                    >
+                      {busy === `claim-${s.id}` ? "Sending…" : `Claim ${fromWad(s.payout, 2)} USDC`}
+                    </button>
+                  ) : (
+                    <button
+                      {...noRestore}
+                      type="button"
+                      disabled={Boolean(busy) || !mature}
+                      onClick={() => void shortTx(`settle-${s.id}`, "settleShorts", s.id)}
+                      className="min-h-10 rounded-full bg-zinc-950/5 text-sm font-medium disabled:opacity-40 dark:bg-white/10"
+                    >
+                      {busy === `settle-${s.id}` ? "Sending…" : mature ? "Settle short book" : "Settles at maturity"}
+                    </button>
+                  )}
                 </article>
               );
             })}

@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { type Address } from "viem";
-import { useBlockNumber, useReadContract, useReadContracts } from "wagmi";
-import { cdpAbi, managerAbi } from "@/lib/abi";
-import { SWAP } from "@/lib/addresses";
+import { useAccount, useBlockNumber, useReadContract, useReadContracts } from "wagmi";
+import { cdpAbi, managerAbi, seasonPoolAbi, tokenAbi } from "@/lib/abi";
+import { SEASON_POOL, SWAP } from "@/lib/addresses";
 import { ensureAllowance } from "@/lib/ensure-usdc";
 import { fromWad, seasonOf, stampFromUnix } from "@/lib/format";
 import { getTxClients } from "@/lib/tx-clients";
 import { txError } from "@/lib/tx-error";
-import { markHealth, useDisplayMid } from "@/lib/use-display-mid";
+import { useDisplayMid } from "@/lib/use-display-mid";
 import { useFillTape } from "@/lib/use-fill-tape";
 import { useNnsName } from "@/lib/use-nns-name";
+import { useNowSec } from "@/lib/use-now-sec";
 import { useProtocol } from "@/lib/use-protocol";
 import { monadTestnet } from "@/lib/wagmi";
+import { noRestore } from "@/lib/no-restore";
 
 const DAY = 86400n;
 const PAR = 10n ** 18n;
@@ -44,15 +46,6 @@ function Named({ address }: { address: Address }) {
   return <>{name}</>;
 }
 
-function useNowSec() {
-  const [now, setNow] = useState(() => BigInt(Math.floor(Date.now() / 1000)));
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(BigInt(Math.floor(Date.now() / 1000))), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
-}
-
 function maturityStart(cdp: Cdp) {
   return cdp.firstSaleAt > 0n ? cdp.firstSaleAt : cdp.openedAt;
 }
@@ -68,6 +61,8 @@ function formatRemain(sec: bigint) {
 
 export default function CellPage() {
   const protocol = useProtocol();
+  const { address: account } = useAccount();
+  const me = account?.toLowerCase();
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const tape = useFillTape(protocol.market);
@@ -120,6 +115,51 @@ export default function CellPage() {
     },
   });
 
+  const held = useReadContracts({
+    contracts: ids.map((id) => ({
+      address: protocol.token!,
+      abi: tokenAbi,
+      functionName: "balanceOf" as const,
+      args: [account!, id] as const,
+      chainId: monadTestnet.id,
+    })),
+    query: { enabled: Boolean(protocol.token && account) && ids.length > 0, refetchInterval: 4000 },
+  });
+
+  const seasonIds = useReadContracts({
+    contracts: ids.map((id) => ({
+      address: SEASON_POOL!,
+      abi: seasonPoolAbi,
+      functionName: "marketOfCdp" as const,
+      args: [id] as const,
+      chainId: monadTestnet.id,
+    })),
+    query: { enabled: Boolean(SEASON_POOL) && ids.length > 0, refetchInterval: 8000 },
+  });
+  const seasonMids = ids.map((_, i) => (seasonIds.data?.[i]?.result as bigint | undefined) ?? 0n);
+  const seasonMarkets = useReadContracts({
+    contracts: seasonMids
+      .filter((m) => m > 0n)
+      .map((m) => ({
+        address: SEASON_POOL!,
+        abi: seasonPoolAbi,
+        functionName: "markets" as const,
+        args: [m] as const,
+        chainId: monadTestnet.id,
+      })),
+    query: {
+      enabled: Boolean(SEASON_POOL) && seasonMids.some((m) => m > 0n),
+      refetchInterval: 8000,
+    },
+  });
+  const seasonResolved = new Map<bigint, { verdantWins: boolean }>();
+  seasonMids
+    .filter((m) => m > 0n)
+    .forEach((m, j) => {
+      const row = seasonMarkets.data?.[j]?.result as readonly unknown[] | undefined;
+      if (row && row[8]) seasonResolved.set(m, { verdantWins: Boolean(row[9]) });
+    });
+
   const cells = ids
     .map((id, i) => {
       const cdp = pack.data?.[i * 3]?.result as Cdp | undefined;
@@ -127,17 +167,7 @@ export default function CellPage() {
       const hunt = pack.data?.[i * 3 + 2]?.result;
       if (!cdp?.active) return null;
       const hOn = h as bigint | undefined;
-      const hMark =
-        cdp.debtAmount > 0n
-          ? markHealth(
-              cdp.collateralAmount,
-              cdp.debtAmount,
-              mid.markPx > 0n ? mid.markPx : 10n ** 18n,
-            )
-          : (hOn ?? 0n);
-      // Hunt / repay gates use on-chain G/F — same as the contract.
       const seasonOn = hOn != null && hOn > 0n ? seasonOf(hOn) : "Verdant";
-      const seasonMark = hMark > 0n ? seasonOf(hMark) : "Verdant";
       const huntPending = Array.isArray(hunt)
         ? Boolean(hunt[2])
         : Boolean((hunt as { pending?: boolean } | undefined)?.pending);
@@ -150,13 +180,22 @@ export default function CellPage() {
       const blockOk =
         block.data != null ? block.data >= cdp.openBlock + MIN_BLOCKS : timeRemain === 0n;
       const mature = timeRemain === 0n && blockOk;
+      const seasonMid = seasonMids[i] ?? 0n;
+      const settled = seasonResolved.get(seasonMid);
+      const seasonLink =
+        seasonMid === 0n
+          ? `Season · open / mint for cell #${id}`
+          : settled
+            ? `Season #${seasonMid} · settled (${settled.verdantWins ? "Verdant" : "Frostbite"} won)`
+            : `Season #${seasonMid} · mint / resolve for cell #${id}`;
+      const mine = (held.data?.[i]?.result as bigint | undefined) ?? 0n;
       return {
         id,
         cdp,
-        h: hMark,
+        mine,
+        seasonLink,
         hOn,
         seasonOn,
-        seasonMark,
         huntPending,
         huntBond,
         matureAt,
@@ -184,7 +223,7 @@ export default function CellPage() {
     setNote(null);
     try {
       await fn();
-      await Promise.all([pack.refetch(), nextId.refetch(), tape.refetch()]);
+      await Promise.all([pack.refetch(), nextId.refetch(), tape.refetch(), held.refetch()]);
     } catch (e) {
       setNote(txError(e));
     } finally {
@@ -197,13 +236,14 @@ export default function CellPage() {
       <div>
         <h1 className="text-2xl font-semibold sm:text-3xl">Cell</h1>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Hunt uses on-chain H = G/F (Frostbite ≤ 1.10), not mark. During 24h: request
-          locks bond. After maturity: instant liquidateCDP. If H ≤ 1.00, Winter levy (1%)
-          is charged on top of B.
+          Health H = G / (F × P<sub>mid</sub>), marked to the mMonad price (Frostbite ≤ 1.10).
+          Long buys raise P<sub>mid</sub> and lower H; shorts do the opposite. During 24h: request
+          locks bond. After maturity: instant liquidateCDP. If H ≤ 1.00, Winter levy (1%) is
+          charged on top of B.
         </p>
         <p className="mt-2 font-mono text-xs text-zinc-500">
-          P<sub>mid</sub> {mid.label} · mark {mid.markLabel} ({mid.markSource})
-          {mid.lastLabel ? ` · last ${mid.lastLabel}` : ""}
+          P<sub>mid</sub> {mid.label} · last long {mid.lastLong > 0n ? fromWad(mid.lastLong) : "—"} ·
+          last short {mid.lastShort > 0n ? fromWad(mid.lastShort) : "—"}
         </p>
         {!SWAP && (
           <p className="mt-2 text-xs text-[#E11D48]">Set NEXT_PUBLIC_SWAP.</p>
@@ -229,6 +269,12 @@ export default function CellPage() {
           c.hOn != null && c.hOn <= PAR ? (bond * WINTER_BPS) / 10_000n : 0n;
         const usdcNeed = bond + winterFee;
         const canHunt = frostOn || c.huntPending;
+        const isIssuer = me != null && c.cdp.issuer.toLowerCase() === me;
+        const retireAmt = c.mine < c.cdp.debtAmount ? c.mine : c.cdp.debtAmount - 1n;
+        const redeemOut =
+          c.cdp.collateralAmount >= c.cdp.debtAmount
+            ? c.mine
+            : (c.mine * c.cdp.collateralAmount) / c.cdp.debtAmount;
         return (
           <section key={c.id.toString()} className="flex flex-col gap-4">
             <dl className="grid grid-cols-2 gap-3 rounded-2xl border border-zinc-200 bg-white p-5 text-sm dark:border-white/10 dark:bg-white/[0.03]">
@@ -236,22 +282,21 @@ export default function CellPage() {
               <dd className="text-right font-medium">
                 <Named address={c.cdp.issuer} />
               </dd>
-              <dt className="text-zinc-500">Long owner</dt>
+              <dt className="text-zinc-500">Last buyer</dt>
               <dd className="text-right font-medium">
                 <Named address={c.cdp.longOwner} />
               </dd>
+              {c.mine > 0n && (
+                <>
+                  <dt className="text-zinc-500">Your notes</dt>
+                  <dd className="text-right font-mono">{fromWad(c.mine, 2)} mMonad</dd>
+                </>
+              )}
               <dt className="text-zinc-500">Collateral</dt>
               <dd className="text-right font-mono">{fromWad(c.cdp.collateralAmount, 2)} USDC</dd>
               <dt className="text-zinc-500">Face</dt>
               <dd className="text-right font-mono">{fromWad(c.cdp.debtAmount, 0)} mMonad</dd>
-              <dt className="text-zinc-500">H @ mark</dt>
-              <dd className="text-right font-mono">
-                {c.h != null && c.h > 0n ? fromWad(c.h, 4) : "—"}{" "}
-                <span className="text-zinc-500">
-                  (<Season name={c.seasonMark} />)
-                </span>
-              </dd>
-              <dt className="text-zinc-500">H on-chain (gate)</dt>
+              <dt className="text-zinc-500">Health H = G/(F·P)</dt>
               <dd className="text-right font-mono">
                 {c.hOn != null ? fromWad(c.hOn, 4) : "—"}{" "}
                 <Season name={c.seasonOn} />
@@ -287,6 +332,7 @@ export default function CellPage() {
             </dl>
             <div className="flex flex-col gap-3">
               <button
+                {...noRestore}
                 type="button"
                 disabled={Boolean(busy) || !canHunt}
                 onClick={() =>
@@ -311,7 +357,7 @@ export default function CellPage() {
                     }
                     if (!frostOn) {
                       setNote(
-                        `On-chain H is ${c.hOn != null ? fromWad(c.hOn, 2) : "—"} (need ≤ 1.10). Mark season can differ.`,
+                        `On-chain H is ${c.hOn != null ? fromWad(c.hOn, 2) : "—"} (need ≤ 1.10).`,
                       );
                       return;
                     }
@@ -363,8 +409,9 @@ export default function CellPage() {
                         : "Hunt · request, lock B"}
               </button>
               <button
+                {...noRestore}
                 type="button"
-                disabled={Boolean(busy) || frostOn || c.huntPending || !c.mature}
+                disabled={Boolean(busy) || !isIssuer || frostOn || c.huntPending || !c.mature}
                 onClick={() =>
                   void send(`repay-${c.id}`, async () => {
                     const { publicClient, wallet } = await getTxClients();
@@ -382,24 +429,71 @@ export default function CellPage() {
               >
                 {busy === `repay-${c.id}`
                   ? "Sending…"
-                  : !c.mature
+                  : !isIssuer
+                    ? "Repay · issuer wallet only"
+                    : !c.mature
                     ? `Repay · wait ${formatRemain(c.remain)}`
                     : frostOn
                       ? "Repay · Verdant only (on-chain)"
                       : "Repay · issuer, Verdant, off-book"}
               </button>
-              <button
-                type="button"
-                disabled
-                className="min-h-12 rounded-full bg-zinc-950/5 py-3 text-sm font-medium text-zinc-500 dark:bg-white/10"
-              >
-                Withdraw · up to collateral or mark
-              </button>
+              {c.mine > 0n && (
+                <button
+                  {...noRestore}
+                  type="button"
+                  disabled={Boolean(busy) || !c.mature}
+                  onClick={() =>
+                    void send(`redeem-${c.id}`, async () => {
+                      const { publicClient, wallet } = await getTxClients();
+                      const hash = await wallet.writeContract({
+                        address: protocol.manager!,
+                        abi: managerAbi,
+                        functionName: "redeemMatured",
+                        args: [c.id, c.mine],
+                      });
+                      await publicClient.waitForTransactionReceipt({ hash });
+                      setNote(`Redeemed ${fromWad(c.mine, 2)} notes.`);
+                    })
+                  }
+                  className="min-h-12 rounded-full bg-zinc-950/5 py-3 text-sm font-medium text-zinc-800 disabled:opacity-40 dark:bg-white/10 dark:text-zinc-200"
+                >
+                  {busy === `redeem-${c.id}`
+                    ? "Sending…"
+                    : c.mature
+                      ? `Redeem ${fromWad(c.mine, 2)} notes → ${fromWad(redeemOut, 2)} USDC`
+                      : `Redeem at par · after maturity (${formatRemain(c.remain)})`}
+                </button>
+              )}
+              {isIssuer && retireAmt > 0n && (
+                <button
+                  {...noRestore}
+                  type="button"
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    void send(`retire-${c.id}`, async () => {
+                      const { publicClient, wallet } = await getTxClients();
+                      const hash = await wallet.writeContract({
+                        address: protocol.manager!,
+                        abi: managerAbi,
+                        functionName: "retire",
+                        args: [c.id, retireAmt],
+                      });
+                      await publicClient.waitForTransactionReceipt({ hash });
+                      setNote(`Retired ${fromWad(retireAmt, 2)} notes. Face shrinks, H rises.`);
+                    })
+                  }
+                  className="min-h-12 rounded-full bg-zinc-950/5 py-3 text-sm font-medium text-zinc-800 disabled:opacity-40 dark:bg-white/10 dark:text-zinc-200"
+                >
+                  {busy === `retire-${c.id}`
+                    ? "Sending…"
+                    : `Retire · burn ${fromWad(retireAmt, 2)} bought-back notes`}
+                </button>
+              )}
               <Link
                 href={`/season?cdp=${c.id.toString()}`}
                 className="min-h-12 rounded-full border border-zinc-200 py-3 text-center text-sm font-medium text-zinc-700 dark:border-white/10 dark:text-zinc-300"
               >
-                Season · open / mint for cell #{c.id.toString()}
+                {c.seasonLink}
               </Link>
             </div>
           </section>
