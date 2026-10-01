@@ -21,9 +21,6 @@ export function Footer() {
           <p className="text-xs leading-5 text-zinc-600 dark:text-zinc-400">
             © 2026 MontaneSwap
           </p>
-          <p className="text-[11px] leading-4 text-zinc-500">
-            Built for Monad Metropolis · testnet demo · not financial advice.
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <Link
