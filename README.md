@@ -3,6 +3,8 @@
 Debt-note **CLOB** on **Monad** (testnet `10143`) for the Metropolis hackathon.  
 Issue a cell → notes listed on the long book → trade notes or bet on their price on the short book → optional Season (Verdant / Frostbite).
 
+**Live app:** [montane-swap.vercel.app](https://montane-swap.vercel.app)
+
 ```
 frontend/     Next.js 16 · wagmi · RainbowKit · viem
 contracts/    Foundry · core protocol + SeasonPool
@@ -16,8 +18,10 @@ brand/        logo / assets
 ## Judges: try it in 2 minutes
 
 1. Add **Monad testnet** (chain `10143`, RPC `https://testnet-rpc.monad.xyz`) to your wallet and get gas MON from the [Monad faucet](https://faucet.monad.xyz).
-2. Open the app's **Faucet** page (footer link, `/faucet`), connect your wallet and click **Test USDC**. It mints 1,000 MockUSDC to your wallet. The same button sits in the header once you are connected.
+2. Open the app's [**Faucet**](https://montane-swap.vercel.app/faucet) page (also in the footer), connect your wallet and click **Test USDC**. It mints 1,000 MockUSDC to your wallet. The same button sits in the header once you are connected.
 3. **Trade** to buy notes or open a short. **Issue** to open your own cell (one per wallet). **Season** to bet Verdant or Frostbite.
+
+MetaMask may show a security warning on connect and on transactions, because the domain is new and the contracts live on testnet. Transactions still go through. The same app runs locally without the warning (`cd frontend && pnpm install && pnpm dev`).
 
 Prefer the CLI? See [Test USDC](#test-usdc-mockusdc) below.
 
