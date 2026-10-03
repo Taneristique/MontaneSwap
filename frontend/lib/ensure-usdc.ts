@@ -1,4 +1,4 @@
-import { erc20Abi, type Address, maxUint256 } from "viem";
+import { erc20Abi, type Address } from "viem";
 import type { PublicClient, WalletClient } from "viem";
 
 const mem = new Map<string, bigint>();
@@ -23,8 +23,9 @@ async function readAllowance(
 }
 
 /**
- * Approve `maxUint256` once when short.
- * Skips the wallet prompt when on-chain (or cached) allowance already covers `need`.
+ * Approve exactly `need` when short. Unlimited approvals from a new domain get flagged as
+ * drainer patterns by wallet security scanners.
+ * Skips the wallet prompt when the on-chain allowance already covers `need`.
  */
 export async function ensureAllowance(opts: {
   publicClient: PublicClient;
@@ -38,12 +39,6 @@ export async function ensureAllowance(opts: {
   if (need <= 0n) return;
 
   const k = key(token, owner, spender);
-  const cached = mem.get(k);
-  if (cached != null && cached >= need) {
-    // Cheap path — still verify once in a while via fresh read below if cache is max.
-    if (cached === maxUint256) return;
-  }
-
   let have = await readAllowance(publicClient, token, owner, spender);
   mem.set(k, have);
   if (have >= need) return;
@@ -58,7 +53,7 @@ export async function ensureAllowance(opts: {
     address: token,
     abi: erc20Abi,
     functionName: "approve",
-    args: [spender, maxUint256],
+    args: [spender, need],
     account: owner,
     chain: wallet.chain,
   });
