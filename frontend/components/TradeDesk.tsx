@@ -12,6 +12,8 @@ import { fromWad, seasonOf, shortAddr, stampFromUnix, toWad, utcFromUnix } from 
 /** Last N maker opens / personal fills shown in tabs. */
 const MY_RECENT = 25;
 const BOOK_DEPTH = 4;
+const BPS = 10_000n;
+const PRICE_BAND_BPS = 2_000n;
 import { getTxClients } from "@/lib/tx-clients";
 import { txError } from "@/lib/tx-error";
 import { useDisplayMid } from "@/lib/use-display-mid";
@@ -443,6 +445,12 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
   const autoCell =
     (best && best.cdpId > 0n ? best.cdpId : undefined) ?? activeCells[activeCells.length - 1];
 
+  /** UI price band, like an exchange PERCENT_PRICE filter: one order moves the print at most 20%. */
+  const bandMax =
+    book === "long" && mid.lastLong > 0n ? (mid.lastLong * (BPS + PRICE_BAND_BPS)) / BPS : 0n;
+  const bandMin =
+    book === "short" && mid.lastShort > 0n ? (mid.lastShort * (BPS - PRICE_BAND_BPS)) / BPS : 0n;
+
   const spreadDefault =
     book === "long"
       ? mid.longFloor > 0n ? fromWad(mid.longFloor) : "1.005"
@@ -604,6 +612,14 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
     const px = toWad(price);
     if (amt <= 0n || px <= 0n) {
       setNote("Size and price must be positive.");
+      return;
+    }
+    if (bandMax > 0n && px > bandMax) {
+      setNote(`Price band: long orders up to ${fromWad(bandMax)} (last long + 20%).`);
+      return;
+    }
+    if (bandMin > 0n && px < bandMin) {
+      setNote(`Price band: short orders down to ${fromWad(bandMin)} (last short − 20%).`);
       return;
     }
     const cdpId = pickedCdp ?? autoCell ?? 0n;
@@ -855,8 +871,8 @@ export function TradeDesk({ fillTape }: { fillTape?: TapeApi } = {}) {
             />
             <span className="text-[11px] text-zinc-500">
               {book === "long"
-                ? `Long orders ≥ ${mid.longFloor > 0n ? fromWad(mid.longFloor) : "—"} (last short + 0.10)`
-                : `Short orders ≤ ${mid.shortCap > 0n ? fromWad(mid.shortCap) : "—"} (last long − 0.10)`}
+                ? `Long orders ${mid.longFloor > 0n ? fromWad(mid.longFloor) : "—"} – ${bandMax > 0n ? fromWad(bandMax) : "—"} (last short + 0.10 · last long + 20%)`
+                : `Short orders ${bandMin > 0n ? fromWad(bandMin) : "—"} – ${mid.shortCap > 0n ? fromWad(mid.shortCap) : "—"} (last short − 20% · last long − 0.10)`}
             </span>
           </label>
           <p className="mt-3 text-xs text-zinc-500">

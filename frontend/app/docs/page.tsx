@@ -5,6 +5,7 @@ const toc = [
   { href: "#what", label: "What you can do" },
   { href: "#issue", label: "Issue a cell" },
   { href: "#trade", label: "Trade the note" },
+  { href: "#price-band", label: "Price band" },
   { href: "#maturity", label: "24h maturity" },
   { href: "#hunt", label: "Hunt & novation" },
   { href: "#repay", label: "Repay" },
@@ -155,6 +156,56 @@ export default function DocsPage() {
             cell&apos;s H. Long orders must be priced at least <strong>0.10 above the last short
             fill</strong> and short orders at least 0.10 below the last long fill, so the two
             books always keep a spread. Fills under 1% of the cell&apos;s face do not move P_mid.
+          </p>
+
+          <h3 id="price-band" className="scroll-mt-24 pt-2 font-medium text-zinc-950 dark:text-white">
+            Price band (UI today, contract on mainnet)
+          </h3>
+          <p>
+            The spread rule gives each book only one edge. Longs have a floor (last short + 0.10)
+            but no ceiling, and shorts have a ceiling (last long − 0.10, below 1.00) but no floor.
+            Without a cap, one order could jump the price: with mMonad at 2.00, a long bid at
+            50 would rest at 50, and a single seller filling it would print 50. P_mid would leap,
+            every cell&apos;s H would collapse toward Frostbite, and Season outcomes would follow a
+            single trade instead of the market.
+          </p>
+          <p>
+            The trade desk therefore applies a <strong>±20% price band</strong>, like the
+            percent-price filter on centralized exchanges:
+          </p>
+          <ul className="list-disc space-y-2 pl-5">
+            <li>
+              <strong className="font-medium text-zinc-900 dark:text-zinc-200">Long book</strong> —
+              price between last short + 0.10 and <strong>last long + 20%</strong>. At a last long
+              of 2.00, the ceiling is 2.40.
+            </li>
+            <li>
+              <strong className="font-medium text-zinc-900 dark:text-zinc-200">Short book</strong> —
+              price between <strong>last short − 20%</strong> and last long − 0.10. At a last
+              short of 0.90, the floor is 0.72.
+            </li>
+          </ul>
+          <p>
+            The allowed range is shown under the price input, and out-of-band orders are refused
+            with a message before any transaction is signed. Prices can still trend: each print
+            resets the reference, so a real move just takes several trades, each priced against
+            the last. What the band removes is the one-shot jump.
+          </p>
+          <p>
+            <strong>Limitation on testnet:</strong> the band lives in the frontend only. The
+            deployed <code className="font-mono text-xs">CreditMarket</code> still enforces just
+            the 0.10 spread, so a wallet calling the contract directly can bypass it. We kept the
+            testnet bytecode frozen during the hackathon rather than redeploy the whole stack.
+          </p>
+          <p>
+            <strong>Mainnet:</strong> the same check moves into{" "}
+            <code className="font-mono text-xs">placeOrder</code> and{" "}
+            <code className="font-mono text-xs">fillOrder</code>, next to the existing{" "}
+            <code className="font-mono text-xs">_inSpread</code> test, with a new{" "}
+            <code className="font-mono text-xs">PriceOutOfBand</code> error. The band width becomes
+            a protocol parameter. The reference stays the last print, which already ignores fills
+            under 1% of face, so dust trades cannot walk the band. Once enforced on-chain, the UI
+            band is just a preview of the contract rule.
           </p>
           <p>
             The <strong>long book</strong> trades real notes of one cell; orders only match
