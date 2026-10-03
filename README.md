@@ -13,6 +13,16 @@ brand/        logo / assets
 
 ---
 
+## Judges: try it in 2 minutes
+
+1. Add **Monad testnet** (chain `10143`, RPC `https://testnet-rpc.monad.xyz`) to your wallet and get gas MON from the [Monad faucet](https://faucet.monad.xyz).
+2. Open the app's **Faucet** page (footer link, `/faucet`), connect your wallet and click **Test USDC**. It mints 1,000 MockUSDC to your wallet. The same button sits in the header once you are connected.
+3. **Trade** to buy notes or open a short. **Issue** to open your own cell (one per wallet). **Season** to bet Verdant or Frostbite.
+
+Prefer the CLI? See [Test USDC](#test-usdc-mockusdc) below.
+
+---
+
 ## Live stack = this repo (2026-09-28 redeploy)
 
 Frontend defaults and on-chain bytecode match this repository: health is marked to the mMonad price, long and short keep a 0.10 spread, Season settles on marked health, per-cell ERC-1155 notes, cash-settled short book. Sourcify verified on all core contracts including CreditMarket.
@@ -73,7 +83,7 @@ cast send "$USDC" "mint(address,uint256)" "$YOUR_WALLET_ADDRESS" 100000000000000
   --rpc-url https://testnet-rpc.monad.xyz --account teamKey
 ```
 
-No separate faucet script: call the contract (Explorer / cast / Foundry console) the same way. Explorer “Write Contract” + connected wallet also works if you prefer not to use cast.
+In the app, the **Test USDC** header button calls the same `mint` (1,000 per click). Explorer “Write Contract” + connected wallet also works if you prefer not to use cast.
 
 ---
 

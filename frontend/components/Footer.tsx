@@ -30,6 +30,12 @@ export function Footer() {
             Legal
           </Link>
           <Link
+            href="/faucet"
+            className="text-xs font-medium text-zinc-600 underline-offset-2 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-white"
+          >
+            Faucet
+          </Link>
+          <Link
             href="/docs"
             className="text-xs font-medium text-zinc-600 underline-offset-2 hover:text-zinc-950 hover:underline dark:text-zinc-400 dark:hover:text-white"
           >

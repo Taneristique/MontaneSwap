@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Logo } from "./Logo";
 import { Connect } from "./Connect";
+import { Faucet } from "./Faucet";
 import { ThemeToggle } from "./ThemeToggle";
 
 const links = [
@@ -65,6 +66,7 @@ export function Header() {
           <span className="hidden rounded-full border border-zinc-200 px-3 py-1 text-xs text-zinc-500 dark:border-white/15 dark:text-zinc-400 lg:inline">
             Monad testnet
           </span>
+          <Faucet />
           <ThemeToggle />
           <Connect />
         </div>
